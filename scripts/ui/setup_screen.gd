@@ -1,10 +1,10 @@
 extends Control
-## Pick the party and difficulty, then enter the dungeon.
+## Pick the hero and difficulty, then enter the dungeon.
 
 const DIFFICULTIES := [["Normal", 1.0], ["Hard", 1.5], ["Nightmare", 2.0]]
-const MAX_PARTY := 6
 
 var _checks: Dictionary = {}
+var _group := ButtonGroup.new()
 var _diff_index: int = 0
 var _info: Label
 var _start: Button
@@ -26,7 +26,7 @@ func _ready() -> void:
 	pad.custom_minimum_size.x = 120
 	top.add_child(pad)
 	v.add_child(top)
-	v.add_child(UI.label("Choose your party (up to %d heroes)" % MAX_PARTY, "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
+	v.add_child(UI.label("Choose the hero you will control", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -38,7 +38,8 @@ func _ready() -> void:
 		var def := HeroDB.get_def(h.cls)
 		var cb := CheckBox.new()
 		cb.text = "%s  -  %s Lv %d" % [h.name, def.name, h.level]
-		cb.button_pressed = h.id in Session.party_ids
+		cb.button_group = _group
+		cb.button_pressed = h.id == Session.hero_id
 		cb.add_theme_color_override("font_color", def.color)
 		cb.toggled.connect(func(_on): _update())
 		_checks[h.id] = cb
@@ -76,7 +77,7 @@ func _update() -> void:
 	for i in _diff_buttons.size():
 		_diff_buttons[i].button_pressed = (i == _diff_index)
 		_diff_buttons[i].theme_type_variation = "PrimaryButton" if i == _diff_index else ""
-	Session.party_ids = ids
+	Session.hero_id = ids[0] if not ids.is_empty() else -1
 	Session.difficulty = DIFFICULTIES[_diff_index][1]
 	Session.difficulty_name = DIFFICULTIES[_diff_index][0]
 	var bad_decks: Array[String] = []
@@ -84,19 +85,17 @@ func _update() -> void:
 		var h: Dictionary = Save.hero_by_id(id)
 		if Save.deck_size(h) != Save.DECK_SIZE:
 			bad_decks.append(h.name)
-	var ok := ids.size() >= 1 and ids.size() <= MAX_PARTY and bad_decks.is_empty()
+	var ok := ids.size() == 1 and bad_decks.is_empty()
 	_start.disabled = not ok
 	if ids.is_empty():
-		_info.text = "Select at least one hero."
-	elif ids.size() > MAX_PARTY:
-		_info.text = "Too many heroes."
+		_info.text = "Select a hero."
 	elif not bad_decks.is_empty():
 		_info.text = "%s need%s exactly %d cards in the deck. Fix it in town." % [", ".join(bad_decks), "s" if bad_decks.size() == 1 else "", Save.DECK_SIZE]
 	else:
-		_info.text = "Dungeon level %d: the Dark Lord (level %d) gets %d summoning points. Win to earn a card each." % [Session.dungeon_level(), Save.dm_level(), Session.dm_budget()]
+		_info.text = "Dungeon level %d: the Dark Lord (level %d) gets %d summoning points. Win to earn a card." % [Session.dungeon_level(), Save.dm_level(), Session.dm_budget()]
 
 
 func _start_run() -> void:
 	if _selected_ids().is_empty():
 		return
-	UI.go("res://scenes/game.tscn")
+	UI.go("res://scenes/battle.tscn")

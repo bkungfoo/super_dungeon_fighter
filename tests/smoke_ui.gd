@@ -13,6 +13,7 @@ func _ready() -> void:
 
 class Driver extends Node:
 	func _ready() -> void:
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		call_deferred("_run")
 		var t := Timer.new()
 		t.wait_time = 90.0
@@ -53,66 +54,56 @@ class Driver extends Node:
 		await _frames(2)
 
 		print("[smoke] setup")
-		Session.party_ids = [w.id, k.id, m.id]
+		Session.hero_id = w.id
 		get_tree().change_scene_to_file("res://scenes/setup.tscn")
 		await _frames(3)
 		get_tree().current_scene._update()
 		await _frames(1)
 
+		var ids := [w.id, k.id, m.id]
 		for run in 3:
-			print("[smoke] game run %d" % run)
-			Session.difficulty = 1.0 + run
-			get_tree().change_scene_to_file("res://scenes/game.tscn")
+			print("[smoke] battle run %d" % run)
+			Session.hero_id = ids[run]
+			Session.difficulty = 1.0 + run * 0.5
+			get_tree().change_scene_to_file("res://scenes/battle.tscn")
 			await _frames(3)
 			var gs = get_tree().current_scene
-			while not gs.spawn_queue.is_empty():
-				var cells: Array = gs.board.highlights.keys()
-				gs._on_cell_tapped(cells[0])
+			gs.time_scale = 30.0
+			var frames := 0
+			while not gs._finished and frames < 2500:
+				frames += 1
+				if frames % 10 == 0:
+					_drive_hero(gs)
 				await _frames(1)
-			var rounds := 0
-			while gs.phase != gs.Phase.GAME_OVER and rounds < 80:
-				rounds += 1
-				for u in gs.engine.living(Unit.TEAM_HEROES):
-					gs._select(u)
-					_drive_hero(gs, u, rounds)
-				gs._on_confirm()
-				await _frames(3)
-			print("[smoke] run %d finished after %d rounds, winner=%d, log lines=%d" % [run, rounds, gs.engine.winner(), gs.engine.history.size()])
-			if gs.phase != gs.Phase.GAME_OVER:
-				push_error("smoke: game did not finish")
+			print("[smoke] run %d finished after %d frames, winner=%d, sim time %.1fs" % [run, frames, gs.sim.winner(), gs.sim.time])
+			if not gs._finished:
+				push_error("smoke: battle did not finish")
 			await _frames(2)
 			get_tree().change_scene_to_file("res://scenes/town.tscn")
 			await _frames(3)
 		print("[smoke] done")
 		get_tree().quit(0)
 
-	## Plans one hero through the real tap handlers: move up, play a card, aim at a monster.
-	func _drive_hero(gs, u: Unit, rounds: int) -> void:
-		if gs.engine.can_move(u) and not gs.engine.is_ready(u):
-			var cells: Array = gs.board.highlights.keys()
-			if not cells.is_empty():
-				var best: Vector2i = cells[0]
-				for c in cells:
-					if c.y < best.y:
-						best = c
-				gs._on_cell_tapped(best)
-		if gs.engine.can_play(u) and not gs.pending_aim:
-			var cards: Array = gs.engine.playable_cards(u)
-			if not cards.is_empty():
-				var pick: Dictionary = cards[(rounds + u.id) % cards.size()]
-				var from: Vector2i = gs._from_pos(u)
-				for c in cards:
-					for d in GameEngine.DIRS:
-						var v = gs.engine.unit_at(from + d)
-						if v != null and not v.is_hero() and SkillDB.get_def(c.skill).target == "dir" and not SkillDB.params(c.skill, c.rank).has("load"):
-							pick = c
-				gs._on_card_pressed(pick)
-		if gs.pending_aim:
-			var cells: Array = gs.board.highlights.keys()
-			if not cells.is_empty():
-				var target: Vector2i = cells[0]
-				for c in cells:
-					var v = gs.engine.unit_at(c)
-					if v != null and not v.is_hero():
-						target = c
-				gs._on_cell_tapped(target)
+	## Drives the hero through the scene's own input handlers: card buttons,
+	## taps on enemies, double taps on the ground.
+	func _drive_hero(gs) -> void:
+		var hero: Actor = gs.hero
+		if not hero.alive:
+			return
+		if hero.loaded.is_empty() and not hero.is_charging():
+			for b in gs.hand_bar.get_children():
+				if b is Button and not b.disabled and gs.sim.rng.randf() < 0.6:
+					b.pressed.emit()
+					break
+		var e: Actor = gs.sim.nearest_enemy(hero)
+		if e == null:
+			return
+		var screen: Vector2 = gs.cam.unproject_position(Vector3(e.pos.x, 0.8, e.pos.y))
+		if not hero.loaded.is_empty() and BattleSim.targets_point(hero.loaded.skill):
+			var g = gs.ground_point(screen)
+			if g != null:
+				gs.sim.command_point(hero, g)
+		elif gs.pick_enemy(screen) != null:
+			gs._click(screen)
+		else:
+			gs.sim.command_target(hero, e.id)

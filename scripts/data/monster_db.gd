@@ -61,21 +61,22 @@ static func available(dm_level: int) -> Array[String]:
 	return out
 
 
-static func make_unit(key: String) -> Unit:
+static func make_actor(key: String) -> Actor:
 	var d: Dictionary = MONSTERS[key]
-	var u := Unit.new()
-	u.name = d.name
-	u.cls = key
-	u.team = Unit.TEAM_MONSTERS
-	u.max_life = d.life
-	u.life = d.life
-	u.max_stam = d.stam
-	u.stam = d.stam
-	u.stam_regen = d.regen
-	u.attack = d.attack
-	u.move = d.move
-	u.weapon = d.weapon
-	u.skills = d.skills.duplicate()
-	u.summon_value = d.value
-	u.is_boss = d.get("boss", false)
-	return u
+	var a := Actor.new()
+	a.name = d.name
+	a.cls = key
+	a.team = Actor.TEAM_MONSTERS
+	a.max_life = d.life
+	a.life = d.life
+	a.max_stam = d.stam
+	a.stam = d.stam
+	a.stam_regen = d.regen * 0.6
+	a.attack = d.attack
+	a.speed = 1.6 + d.move * 0.45
+	a.weapon = d.weapon
+	a.skills = d.skills.duplicate()
+	a.summon_value = d.value
+	a.is_boss = d.get("boss", false)
+	a.radius = 0.55 if a.is_boss else (0.5 if d.value >= 4 else 0.42)
+	return a

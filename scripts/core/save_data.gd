@@ -41,13 +41,33 @@ func load_game() -> void:
 		for field in ["deck", "collection"]:
 			var fixed := {}
 			for key in h.get(field, {}):
+				# Attack became the built-in default; drop its cards.
+				if key.begins_with("attack:"):
+					continue
 				fixed[key] = int(h[field][key])
 			h[field] = fixed
+		if deck_size(h) < DECK_SIZE:
+			_top_up_deck(h)
 	for k in data.dm:
 		data.dm[k] = int(data.dm[k])
 	data.runs = int(data.runs)
 	data.wins = int(data.wins)
 	data.next_hero_id = int(data.next_hero_id)
+
+
+## Fills a short deck from the collection, then from the starter deck.
+func _top_up_deck(h: Dictionary) -> void:
+	for key in h.collection:
+		while deck_size(h) < DECK_SIZE and h.deck.get(key, 0) < h.collection[key]:
+			h.deck[key] = h.deck.get(key, 0) + 1
+	var starter: Dictionary = HeroDB.get_def(h.cls).starter_deck
+	var keys: Array = starter.keys()
+	var i := 0
+	while deck_size(h) < DECK_SIZE and not keys.is_empty():
+		var key: String = keys[i % keys.size()]
+		h.deck[key] = h.deck.get(key, 0) + 1
+		h.collection[key] = maxi(h.collection.get(key, 0), h.deck[key])
+		i += 1
 
 
 func save_game() -> void:
@@ -116,7 +136,7 @@ func collection_size(h: Dictionary) -> int:
 	return n
 
 
-## The deck expanded into individual cards, ready for GameEngine.setup_deck.
+## The deck expanded into individual cards, ready for BattleSim.setup_deck.
 func deck_cards(h: Dictionary) -> Array:
 	var out: Array = []
 	for key in h.deck:
@@ -193,24 +213,24 @@ func hero_stats(h: Dictionary) -> Dictionary:
 	}
 
 
-func make_unit(h: Dictionary) -> Unit:
+func make_actor(h: Dictionary) -> Actor:
 	var def := HeroDB.get_def(h.cls)
 	var st := hero_stats(h)
-	var u := Unit.new()
-	u.name = h.name
-	u.cls = h.cls
-	u.team = Unit.TEAM_HEROES
-	u.hero_id = h.id
-	u.max_life = st.life
-	u.life = st.life
-	u.max_stam = st.stam
-	u.stam = st.stam
-	u.stam_regen = st.regen
-	u.attack = st.attack
-	u.move = st.move
-	u.weapon = def.weapon
-	u.has_shield = def.shield
-	return u
+	var a := Actor.new()
+	a.name = h.name
+	a.cls = h.cls
+	a.team = Actor.TEAM_HEROES
+	a.hero_id = h.id
+	a.max_life = st.life
+	a.life = st.life
+	a.max_stam = st.stam
+	a.stam = st.stam
+	a.stam_regen = st.regen * 0.6
+	a.attack = st.attack
+	a.speed = 2.0 + st.move * 0.5
+	a.weapon = def.weapon
+	a.has_shield = def.shield
+	return a
 
 
 # ------------------------------------------------------------------ run results
@@ -220,12 +240,12 @@ func dm_level() -> int:
 
 
 ## Applies XP and card rewards from a finished run. Returns readable lines.
-func apply_run(engine: GameEngine, heroes_won: bool, dungeon_level: int) -> Array[String]:
+func apply_run(sim: BattleSim, heroes_won: bool, dungeon_level: int) -> Array[String]:
 	var lines: Array[String] = []
 	data.runs += 1
 	if heroes_won:
 		data.wins += 1
-	for u in engine.units:
+	for u in sim.actors:
 		if not u.is_hero():
 			continue
 		var h := hero_by_id(u.hero_id)
@@ -246,15 +266,15 @@ func apply_run(engine: GameEngine, heroes_won: bool, dungeon_level: int) -> Arra
 		if not u.alive:
 			line += "  (knocked out, recovers in town)"
 		if heroes_won:
-			var key := random_card(h, dungeon_level, engine.rng)
+			var key := random_card(h, dungeon_level, sim.rng)
 			grant_card(h, key)
 			var c := SkillDB.parse_key(key)
 			line += "\n   New card: %s (%s)" % [SkillDB.display_name(c.skill, c.rank), SkillDB.rarity_name(c.skill, c.rank)]
 		lines.append(line)
 	var dm_before := dm_level()
-	var dm_gain: int = int(engine.damage_to_heroes / 5) + 5 * engine.hero_kos + (10 if not heroes_won else 0)
+	var dm_gain: int = int(sim.damage_to_heroes / 5) + 5 * sim.hero_kos + (10 if not heroes_won else 0)
 	data.dm.xp += dm_gain
-	data.dm.kos += engine.hero_kos
+	data.dm.kos += sim.hero_kos
 	if not heroes_won:
 		data.dm.wipes += 1
 	var dm_line := "Dark Lord: +%d XP" % dm_gain

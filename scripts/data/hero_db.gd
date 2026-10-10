@@ -1,30 +1,30 @@
 class_name HeroDB
 extends RefCounted
-## Hero classes. Each class has a pool of skills its cards can come from and
-## a 30-card starter deck (card key -> count).
+## Hero classes. Every hero has a built-in basic Attack; the card pool and the
+## 30-card starter deck (card key -> count) cover everything else.
 
 const CLASSES: Dictionary = {
 	"warrior": {
 		"name": "Warrior", "weapon": "sword", "shield": false,
 		"life": 32, "stam": 10, "regen": 2, "attack": 6, "move": 3,
-		"skills": ["attack", "defend", "grab", "whirlwind", "final_slash"],
-		"starter_deck": {"attack:-1": 12, "defend:-1": 7, "grab:-1": 5, "whirlwind:0": 3, "final_slash:0": 3},
+		"skills": ["defend", "grab", "whirlwind", "final_slash"],
+		"starter_deck": {"defend:-1": 8, "grab:-1": 7, "whirlwind:0": 8, "final_slash:0": 7},
 		"color": Color(0.31, 0.64, 1.0),
 		"desc": "Sword fighter. Mobile, with the dash-slashing Final Slash.",
 	},
 	"knight": {
 		"name": "Knight", "weapon": "blunt", "shield": true,
 		"life": 38, "stam": 9, "regen": 2, "attack": 5, "move": 2,
-		"skills": ["attack", "defend", "grab", "bash", "full_swing", "whirlwind"],
-		"starter_deck": {"attack:-1": 10, "defend:-1": 7, "grab:-1": 4, "bash:0": 5, "full_swing:0": 4},
+		"skills": ["defend", "grab", "bash", "full_swing", "whirlwind"],
+		"starter_deck": {"defend:-1": 8, "grab:-1": 5, "bash:0": 9, "full_swing:0": 8},
 		"color": Color(0.95, 0.80, 0.30),
 		"desc": "Mace and shield. Slow but sturdy; Bash and Full Swing chain into combos.",
 	},
 	"mage": {
 		"name": "Mage", "weapon": "staff", "shield": false,
 		"life": 22, "stam": 14, "regen": 3, "attack": 4, "move": 3,
-		"skills": ["attack", "defend", "blink", "fireball", "frost_nova"],
-		"starter_deck": {"attack:-1": 7, "defend:-1": 6, "blink:-1": 5, "fireball:0": 7, "frost_nova:0": 5},
+		"skills": ["defend", "blink", "fireball", "frost_nova"],
+		"starter_deck": {"defend:-1": 6, "blink:-1": 7, "fireball:0": 10, "frost_nova:0": 7},
 		"color": Color(0.75, 0.45, 1.0),
 		"desc": "Fragile caster. Fireball and Frost Nova ignore Defend; Blink repositions.",
 	},

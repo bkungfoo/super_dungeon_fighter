@@ -6,28 +6,58 @@ document left open, chosen to keep the document's intent.
 
 ## Setup
 
-* 1 to 6 heroes against the AI Dungeon Master on an 8 x 8 grid. **(fill)**
-  The document allows 2 to 8 heroes; 6 is the limit that stays readable on a
-  phone.
-* The Dungeon Master gets summoning points equal to the sum of the heroes'
-  levels **(doc)**, multiplied by the chosen difficulty (Normal x1, Hard x1.5,
-  Nightmare x2) and plus one point for every two Dark Lord levels. **(fill)**
-  That number is also the **dungeon level**, which drives card rarity.
-* The DM places walls (free, kept to a few cells, never splitting the board)
-  and monsters in the top three rows first; heroes then deploy on the bottom
-  two rows. **(doc, with fixed zones)**
+* One hero (you) against the AI Dungeon Master in a 36 x 36 m arena with
+  random box obstacles. **(fill)** The camera follows the hero; the arena is
+  larger than the screen.
+* The Dungeon Master gets summoning points equal to the hero's level + 1
+  **(doc, adapted for a single hero)**, multiplied by the chosen difficulty
+  (Normal x1, Hard x1.5, Nightmare x2) plus one point per two Dark Lord
+  levels. That number is also the **dungeon level**, which drives card rarity.
+* Monsters spawn in the far half of the arena; the hero starts near the bottom.
+
+## Real time
+
+The design document's turns become seconds. All constants live at the top of
+`battle_sim.gd`:
+
+| Design value | Real-time value |
+|---|---|
+| 1 tile | 1.5 m (ranges and radii are Euclidean distances) |
+| Load time N | N x 1.2 s of charging (the hero stands still and flashes) |
+| Cooldown N | N x 1.2 s unable to use skills |
+| Stun X | X x 1.0 s helpless |
+| Down X | X x 1.3 s on the floor |
+| Immobile N | N x 1.2 s unable to move |
+| Invulnerable 1 | 1 s |
+| Defend | 2 s of guard |
+| Basic attack | one swing every 0.9 s while engaged |
+| Knockback N | pushed N m; 2 damage per metre blocked by a wall |
+
+## Controls
+
+* **Tap the ground**: walk there. **Hold**: keep walking toward the finger.
+* **Tap an enemy**: engage. The hero walks into range and swings basic attacks
+  (x1 damage, Stun 1, free) until told otherwise.
+* **Tap a card**: play it. It leaves the hand (the hand refills to 5), its
+  stamina cost is paid, and the skill charges. Instant cards are READY at
+  once; Defend fires immediately.
+* **With a skill READY**, tap an enemy: the hero moves until the skill is in
+  range and unleashes it. Melee skills need melee reach; dashes reach their
+  charge distance; skills centred on the hero (Whirlwind, Frost Nova) fire
+  once the enemy is just inside the area radius; aimed area skills (Fireball)
+  fire once the enemy is within range.
+* **Double-tap the ground** with an aimable area skill READY (Fireball, Blink)
+  to cast it centred there (walking into range first if needed).
+* Playing another card replaces a READY skill. Being stunned or knocked down
+  interrupts charging; a READY skill survives.
 
 ## Decks and cards
 
-* Every hero brings a **deck of exactly 30 action cards** and draws an
-  opening hand of 5. A card is a skill at a rank (Attack, or Bash [B], ...).
-* Each round a hero may play **one card from the hand**. Played cards go to
-  the discard pile; at the end of the round the hand refills to 5. When the
-  deck runs out the discard pile is reshuffled into it.
-* Monsters play straight from their skill list (the Dark Lord's hand is
-  unlimited), but obey the same turn rules below.
-* **Rewards**: when the party defeats a dungeon, every hero in it receives one
-  random card its class can use. The dungeon level sets the rarity odds:
+* Every hero has a built-in basic Attack plus a **deck of exactly 30 action
+  cards** and a hand of 5. A card is a skill at a rank (Bash [B], ...).
+* Monsters play straight from their skill list.
+* **Rewards**: when you clear a dungeon you receive one random card your class
+  can use. The dungeon level sets the rarity odds:
 
   | Dungeon level | Common | Uncommon | Rare | Epic |
   |---|---|---|---|---|
@@ -39,43 +69,14 @@ document left open, chosen to keep the document's intent.
   epic = max(0, 2L - 4))
 * **Rarity** is computed from a card's power score so that cards with higher
   average damage and higher priority are rarer:
-  `score = damage x area + status + 0.25 x priority - 0.5 x load time`,
-  where damage is the multiplier (or hits x per-hit for Final Slash), area is
-  1 for single targets, 1 + radius/2 for radius skills, 2 for Fireball's
-  blast (+0.3 for a charge), and status is 0.8 per point of Stun or Down plus
-  0.5 for knockback. Thresholds: Uncommon >= 3.2, Rare >= 5.0, Epic >= 6.8.
-  The resulting table is printed by the test suite.
+  `score = damage x area + status + 0.25 x priority - 0.5 x load time`.
+  Thresholds: Uncommon >= 3.2, Rare >= 5.0, Epic >= 6.8. The test suite prints
+  the resulting table.
 * New cards land in the hero's **collection**; the deck builder in town moves
   copies in and out of the 30-card deck.
-* Starter decks (30 cards): Warrior 12 Attack, 7 Defend, 5 Grab, 3 Whirlwind
-  C, 3 Final Slash C. Knight 10 Attack, 7 Defend, 4 Grab, 5 Bash C, 4 Full
-  Swing C. Mage 7 Attack, 6 Defend, 5 Blink, 7 Fireball C, 5 Frost Nova C.
-
-## A round
-
-1. **Start of round.** Face-down charge-up cards gain a load counter. Cards
-   with enough counters are *ready* and will fire this round.
-2. **Planning.** Every unit secretly plans:
-   * a **move** (orthogonal steps within its Move range), and/or
-   * a **card**, aimed from the cell it will end the move on.
-   * **Instant cards** (no load time: Attack, Defend, Grab, Blink) may be
-     combined with a move in the same turn.
-   * **Charge-up cards** are played standing still. While the card charges
-     the unit may move unless the card says *immobile*. Once the card is
-     ready the unit moves and the skill fires in the same turn, aimed from
-     the destination. A ready unit cannot play another card that round.
-3. **Movement** resolves simultaneously. If two units want the same cell,
-   random priority decides and the loser stops short.
-4. **Skills** resolve in **priority order** (highest first; ties by die roll,
-   with Reset units first). A unit that is stunned or knocked down before its
-   own skill fires loses it, so a fast Attack can interrupt a slow Full Swing
-   that is firing the same round. Defend is applied before anything else, and
-   an Attack aimed at a grabber cancels the Grab.
-5. **End of round.** Stun and Down tokens, cooldowns, immobility and
-   invulnerability tick down; stamina regenerates; hands refill to 5.
-
-Turn timing: Stun 1 applied this round makes the victim skip the next full
-round.
+* Starter decks (30 cards): Warrior 8 Defend, 7 Grab, 8 Whirlwind C, 7 Final
+  Slash C. Knight 8 Defend, 5 Grab, 9 Bash C, 8 Full Swing C. Mage 6 Defend,
+  7 Blink, 10 Fireball C, 7 Frost Nova C.
 
 ## Counters **(fill)**
 
@@ -98,41 +99,37 @@ Active --Stun X--> Stunned      Stunned --Stun or Down--> Down
 Active --Down X--> Down         Down    --Stun or Down--> Reset --> Active
 ```
 
-* **Stun X**: X tokens; the unit skips X rounds. Tokens are removed at the
-  end of each round after the one in which they were applied.
-* **Down X**: like Stun but the unit is on the floor. A stunned unit that is
-  stunned again is knocked down with the *new* value (Y replaces X).
-* Two allies stunning the same target in the same phase count as consecutive
-  stuns: Down max(X, Y).
+* **Stun X**: helpless for X seconds. **Down X**: on the floor for X x 1.3 s.
+* A stunned unit that is stunned again is knocked down with the *new* value
+  (Y replaces X). Two hits landing within 0.35 s count as simultaneous and
+  use max(X, Y).
 * **Reset**: hitting a downed unit with any Stun or Down skill makes it spring
-  back up immediately. It is immune to stun and down for X rounds, acts with
-  top priority next round, and its cooldown and immobility are cleared.
-  **(fill: the document's Reset paragraph is unfinished; this implements the
-  summary's "free move and action to retaliate" as initiative plus immunity.)**
+  back up immediately, immune to stun and down for X + 1 seconds, with its
+  cooldown and immobility cleared. **(fill: the document's Reset paragraph is
+  unfinished; the retaliation is the immediate recovery plus immunity.)**
   Damage still applies, so finishing a downed enemy is fine; chipping it is not.
 
 ## Skill mechanics
 
 * **Cost**: stamina paid when the card is played; some skills also cost life.
-  Stamina regenerates every round (2 or 3 depending on class).
-* **Load N**: fires N rounds later in the charged phase at the direction or
-  cell chosen now. Skills marked "immobile" lock the user in place while
-  loading. Any stun or down interrupts the load. A loading unit cannot play
-  another card.
-* **Cooldown N**: no skills for N rounds, except chained ones. **Immobile N**:
-  no movement for N rounds. **Invulnerable N**: no damage or status.
-* **Chains** (doc): after a skill with a chain list resolves, the listed skills
-  may be played in the next skill phase even during the cooldown. Their load
-  time runs during the cooldown.
-* **Multiplier X**: damage = Attack x X. **Knockback N**: pushed N cells away
-  from the attacker; each blocked cell deals 2 extra damage. **(fill)**
-* **Radius X**: all enemies within X steps (Manhattan). Fireball's blast is the
-  3 x 3 square around the target and hits allies too. **(fill)**
-* **Charge Z**: dash up to Z cells in a straight line. Pounce stops at the
-  first unit and bites it. Final Slash dashes through the lane and splits its
-  hits round-robin among every enemy in the lane. **(fill)**
-* **Split Hits X / Y**: Final Slash deals X hits of Y x 10% damage. The table's
-  Y column (10, 9, 8, 7) is read as damage per hit. **(fill)**
+  Stamina regenerates continuously.
+* **Load N**: N x 1.2 s of charging; the hero stands still. Any stun or down
+  interrupts it and the card is lost.
+* **Cooldown N**: no skills for N x 1.2 s except chained ones. **Immobile N**:
+  no movement. **Invulnerable N**: no damage or status.
+* **Chains** (doc): after a skill with a chain list fires, the listed cards may
+  be played during its cooldown.
+* **Multiplier X**: damage = Attack x X. **Knockback N**: pushed N m away from
+  the attacker; 2 damage per metre blocked by a wall. **(fill)**
+* **Radius X**: all enemies within X x 1.5 m of the caster. Fireball's blast
+  is (radius + 0.5) x 1.5 m around the target point and hits everything.
+  **(fill)**
+* **Charge Z**: dash up to Z x 1.5 m. Pounce stops at the first enemy and
+  bites it. Final Slash dashes the whole lane and splits its hits round-robin
+  among every enemy it passes. **(fill)**
+* **Split Hits X / Y**: Final Slash deals X hits of Y x 10% damage. **(fill)**
+* **Priority** no longer orders resolution (everything is real time); it still
+  feeds the rarity formula.
 
 ## Skill table
 
@@ -190,4 +187,4 @@ monsters. **(doc intent, numbers fill)**
 
 * Shield Charge (by request).
 * Trade skills, crafting, equipment and items.
-* A human Dungeon Master (pass-and-play). The engine is written to support it.
+* Multiple heroes in one run: you control a single hero.

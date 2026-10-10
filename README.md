@@ -1,30 +1,32 @@
 # Super Dungeon Fighter
 
-A simultaneous-reveal tactics brawler built in **Godot 4.7** for iPhone and iPad
-(it also runs on Android and desktop). Each hero brings a 30-card deck of
-skills and holds a hand of 5. Heroes plan a move and a card face down, the
-Dark Lord's monsters do the same, and everything resolves at once in priority
-order: positioning, prediction and combo chains decide the fight. No dice.
-Clearing a dungeon earns every hero a random card; deeper dungeons drop rarer,
-stronger cards.
+A real-time 3D dungeon brawler built in **Godot 4.7** for iPhone and iPad
+(it also runs on Android and desktop). You control one hero with a 30-card
+deck of skills and a hand of 5. Tap to move, tap enemies to attack, tap cards
+to charge skills that fire when you tap a target. The camera follows you
+across an arena larger than the screen. Clearing a dungeon earns a random
+card; deeper dungeons drop rarer, stronger cards.
 
-The design comes from `Super_Dungeon_Fighter_Board_Game.pdf`; the complete
-rules as implemented, including every gap the document left open, are in
-[RULES.md](RULES.md).
+The design comes from `Super_Dungeon_Fighter_Board_Game.pdf` (originally a
+turn-based board game); the complete rules as implemented, including every
+gap the document left open, are in [RULES.md](RULES.md).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `scripts/core/game_engine.gd` | The rules engine: phases, movement, skills, combo state machine, chains. Pure GDScript, no scene nodes. |
-| `scripts/core/dm_ai.gd` | The Dungeon Master AI: summons monsters, lays walls, plays them each round. |
-| `scripts/core/save_data.gd` | Persistent roster (levels, XP, card collections, decks), card rewards, and Dark Lord progression. JSON in `user://`. |
-| `scripts/core/session.gd` | Runtime state shared between scenes (party, difficulty, last result). |
-| `scripts/core/unit.gd`, `board_grid.gd` | Unit and grid data. |
+| `scripts/core/battle_sim.gd` | The real-time rules engine: movement, engagement, casting, combo state machine, chains. Pure GDScript, no scene nodes. |
+| `scripts/core/battle_map.gd` | Arena with box obstacles and A* pathfinding on a coarse grid. |
+| `scripts/core/monster_ai.gd` | Monster brains: chase, basic attacks, skill charging. |
+| `scripts/core/dm_ai.gd` | The Dungeon Master's summoning within the budget. |
+| `scripts/core/save_data.gd` | Persistent roster (levels, XP, card collections, decks), card rewards, Dark Lord progression. JSON in `user://`. |
+| `scripts/core/session.gd` | Runtime state shared between scenes (chosen hero, difficulty, last result). |
+| `scripts/core/actor.gd` | Hero / monster state. |
 | `scripts/data/skill_db.gd` | The skill table (ranks C/B/A/S, costs, priority, chains) and the card rarity formula. |
 | `scripts/data/hero_db.gd`, `monster_db.gd` | Hero classes with starter decks, and the monster roster. |
-| `scripts/ui/*.gd`, `scenes/*.tscn` | Touch UI: main menu, town, run setup, the dungeon screen. |
-| `tests/run_tests.gd` | Headless rules tests and AI-vs-AI fuzzing. |
+| `scripts/ui/battle_scene.gd` | The 3D battle: rendering, camera, tap/hold/double-tap input, HUD. |
+| `scripts/ui/*.gd`, `scenes/*.tscn` | Menu, town (deck builder), run setup. |
+| `tests/run_tests.gd` | Headless rules tests and scripted-hero fuzzing. |
 | `tests/smoke_ui.*`, `tests/screenshot.*` | Drive the real scenes end to end; the latter saves screenshots. |
 
 ## Running on desktop
@@ -61,9 +63,10 @@ export an APK the same way.
 
 ## Design notes
 
-* The engine never touches scene nodes, so rules can be tested headless and the
-  same engine could later drive a pass-and-play or networked Dungeon Master.
-* Monster cards played face down are hidden from the log and the board shows
-  only their load counters, preserving the board game's hidden information.
+* The simulation never touches scene nodes, so rules can be tested headless;
+  the 3D scene only renders it and feeds it commands.
+* Board-game numbers map to the real-time game through a few constants at the
+  top of `battle_sim.gd`: one tile is 1.5 m, load time and cooldown turns are
+  1.2 s each, stun turns are 1 s, down turns 1.3 s.
 * **Shield Charge** from the design document is deliberately not implemented
   yet; its row in the table was left for later design.
