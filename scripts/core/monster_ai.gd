@@ -16,6 +16,13 @@ func think(sim: BattleSim, m: Actor, dt: float) -> void:
 	if h == null:
 		m.clear_intent()
 		return
+	# Monsters loiter until the hero comes close (or hits them).
+	if not m.aggro:
+		if sim.dist(m, h) <= m.aggro_range:
+			sim.alert(m)
+		else:
+			m.clear_intent()
+			return
 	m.target_id = h.id
 	if not m.loaded.is_empty():
 		return

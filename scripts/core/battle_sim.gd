@@ -17,7 +17,6 @@ const SEC_PER_STUN := 1.0
 const SEC_PER_DOWN := 1.3
 const SEC_PER_IMMOBILE := 1.2
 const GUARD_SECONDS := 2.0
-const BASIC_ATTACK_INTERVAL := 0.9
 const MELEE_GAP := 0.6               # gap between two actors at which melee connects
 const KNOCKBACK_METRES := 1.0        # per knockback point
 const PATH_REFRESH := 0.4
@@ -359,7 +358,7 @@ func _tick_actor(a: Actor, dt: float) -> void:
 		a.path = []
 		if basic:
 			if a.attack_timer <= 0.0 and a.cooldown <= 0.0 and a.immobile <= 0.0:
-				a.attack_timer = BASIC_ATTACK_INTERVAL
+				a.attack_timer = a.swing_interval
 				_cast(a, "attack", -1, t, t.pos)
 		else:
 			a.loaded = {}
@@ -458,6 +457,9 @@ func _separate() -> void:
 func _cast(a: Actor, sid: String, rank: int, target: Actor, point: Vector2) -> void:
 	var def := SkillDB.get_def(sid)
 	var p := SkillDB.params(sid, rank)
+	if sid == "attack" and not a.basic_stun:
+		p = p.duplicate()
+		p.erase("stun")
 	var base_dmg: int = maxi(0, int(round(a.attack * float(p.mult))))
 	if sid == "attack":
 		_log("%s attacks." % a.name)
@@ -592,6 +594,8 @@ static func _dist_to_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
 func _apply_hit(att: Actor, v: Actor, sid: String, p: Dictionary, dmg: int, kdir: Vector2) -> void:
 	if not v.alive:
 		return
+	if v.team == Actor.TEAM_MONSTERS:
+		alert(v)
 	if v.invuln > 0.0:
 		_log("%s is invulnerable!" % v.name)
 		_emit("text", {"actor": v, "text": "IMMUNE", "color": Color(0.7, 0.9, 1)})
@@ -711,6 +715,18 @@ func _kill(v: Actor, att: Actor) -> void:
 	for o in living():
 		if o.target_id == v.id:
 			o.target_id = -1
+
+
+## Wakes a monster and its nearby pack.
+func alert(m: Actor) -> void:
+	if m.aggro:
+		return
+	m.aggro = true
+	m.think_timer = minf(m.think_timer, 0.3)
+	for o in living(Actor.TEAM_MONSTERS):
+		if o != m and not o.aggro and o.pos.distance_to(m.pos) < 4.0:
+			o.aggro = true
+			o.think_timer = minf(o.think_timer, 0.5)
 
 
 # ------------------------------------------------------------------ dungeon

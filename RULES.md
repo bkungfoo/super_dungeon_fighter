@@ -169,15 +169,21 @@ recover fully in town.
 
 ## Monsters
 
-| Monster | Value | DM level | Life | Atk | Move | Skills |
-|---|---|---|---|---|---|---|
-| Goblin | 1 | 1 | 12 | 3 | 3 | Attack, Grab |
-| Wolf | 1 | 1 | 10 | 3 | 4 | Attack, Pounce |
-| Skeleton | 2 | 1 | 18 | 4 | 2 | Attack, Defend, Whirlwind C |
-| Orc | 2 | 2 | 24 | 5 | 2 | Attack, Bash C, Defend |
-| Ogre | 4 | 2 | 45 | 8 | 2 | Attack, Full Swing B, Grab |
-| Dark Knight | 5 | 3 | 40 | 7 | 2 | Attack, Bash B, Full Swing B, Defend |
-| Ofrom Champion (boss) | 8 | 4 | 70 | 9 | 3 | Attack, Final Slash B, Whirlwind B, Defend |
+| Monster | Value | DM level | Life | Atk | Swing | Stuns? | Skills |
+|---|---|---|---|---|---|---|---|
+| Goblin | 1 | 1 | 8 | 2 | 1.6 s | no | Attack, Grab |
+| Wolf | 1 | 1 | 7 | 2 | 1.3 s | no | Attack, Pounce |
+| Skeleton | 2 | 1 | 14 | 3 | 1.5 s | no | Attack, Defend, Whirlwind C |
+| Orc | 2 | 2 | 20 | 4 | 1.5 s | yes | Attack, Bash C, Defend |
+| Ogre | 4 | 2 | 40 | 6 | 2.0 s | yes | Attack, Full Swing B, Grab |
+| Dark Knight | 5 | 3 | 36 | 6 | 1.4 s | yes | Attack, Bash B, Full Swing B, Defend |
+| Ofrom Champion (boss) | 8 | 4 | 70 | 8 | 1.1 s | yes | Attack, Final Slash B, Whirlwind B, Defend |
+
+Low-tier monsters swing slowly and their basic attacks do not stun, so a new
+hero is never stun-locked by a pack of goblins. Monsters are slower than the
+hero and **loiter until the hero comes within their aggro range** (7 to 11 m)
+or one of them is hit; a hit also wakes monsters within 4 m, so you fight the
+dungeon one group at a time. **(fill)**
 
 The Dark Lord gains 1 XP per 5 damage dealt to heroes, 5 per hero knocked
 out and 10 per party wipe; every 20 XP is a level, unlocking stronger

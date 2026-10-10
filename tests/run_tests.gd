@@ -60,6 +60,7 @@ func _initialize() -> void:
 	test_final_slash_dash()
 	test_deck_refill()
 	test_stun_interrupts_charging()
+	test_weak_monsters_do_not_stun_and_wait_for_aggro()
 	test_rarity_table()
 	test_card_rewards()
 	test_skill_table_integrity()
@@ -77,8 +78,8 @@ func test_basic_attack_engagement() -> void:
 	_run(sim, 2.0)
 	check(h.pos.distance_to(g.pos) < sim.melee_reach(h, g) + 0.1, "hero closes to melee range (d=%.2f)" % h.pos.distance_to(g.pos))
 	_run(sim, 1.0)
-	check(g.life < 12, "basic attacks land in real time (life %d)" % g.life)
-	check(g.state == Actor.State.STUNNED or g.life <= 0, "basic attack stuns")
+	check(g.life < 8, "basic attacks land in real time (life %d)" % g.life)
+	check(g.state == Actor.State.STUNNED or g.life <= 0, "hero's basic attack stuns")
 	_run(sim, 6.0)
 	check(not g.alive, "goblin eventually dies from repeated basic attacks")
 	check(h.target_id == -1, "target cleared on death")
@@ -120,7 +121,7 @@ func test_instant_card_and_point_cast() -> void:
 	_run(sim, 6.0)
 	check(m.loaded.is_empty(), "fireball cast once in range")
 	check(m.pos.distance_to(Vector2(10.5, 10)) <= 4 * BattleSim.TILE + 0.5, "mage stopped within range")
-	check(g1.life == 4 and g2.life == 4, "both goblins in the blast took x2 damage (%d, %d)" % [g1.life, g2.life])
+	check(g1.life == 0 and g2.life == 0, "both goblins in the blast took x2 damage (%d, %d)" % [g1.life, g2.life])
 	# Without an area skill loaded a point command is just a move.
 	sim.command_point(m, Vector2(20, 30))
 	check(m.has_goal and not m.has_point, "point command without area skill moves instead")
@@ -141,7 +142,7 @@ func test_self_aoe_closes_to_range() -> void:
 	check(h.loaded.is_empty(), "whirlwind cast after closing in")
 	# The goblin was knocked back 2 m by the hit, so allow for that.
 	check(h.pos.distance_to(g.pos) <= sim.aoe_radius(SkillDB.params("whirlwind", 0)) + 2.0 + 0.3, "hero stopped just inside the AoE radius before the knockback (d=%.2f)" % h.pos.distance_to(g.pos))
-	check(g.life < 12, "whirlwind hit the goblin from AoE range (life %d)" % g.life)
+	check(g.life < 8, "whirlwind hit the goblin from AoE range (life %d)" % g.life)
 	check(g.state == Actor.State.DOWN, "whirlwind knocks down")
 
 
@@ -152,6 +153,7 @@ func test_defend_blocks_and_parries() -> void:
 	sim.setup_deck(h, _cards("defend", -1, 30))
 	sim.play_card(h, {"skill": "defend", "rank": -1})
 	check(h.guard > 0.0, "defend is instant and raises guard")
+	sim.alert(g)
 	sim.command_target(g, h.id)
 	_run(sim, 0.5)
 	check(h.life == h.max_life, "guard blocks the basic attack")
@@ -200,7 +202,7 @@ func test_knockback_into_wall() -> void:
 	check(not h.loaded.is_empty(), "full swing loaded after 2.4s")
 	sim.command_target(h, g.id)
 	_run(sim, 0.3)
-	check(g.life < 12 - 10, "x2 damage plus wall slam (life %d)" % g.life)
+	check(g.life <= 0, "x2 damage plus wall slam kills the goblin (life %d)" % g.life)
 	check(g.pos.y > 17.5, "goblin stopped at the wall (y=%.2f)" % g.pos.y)
 	check(h.immobile > 0.0 and h.cooldown > 0.0, "cooldown and immobile set")
 	check(sim.is_chain_available(h, "whirlwind"), "whirlwind chains from full swing during cooldown")
@@ -263,7 +265,7 @@ func test_final_slash_dash() -> void:
 	check(h.loaded.is_empty(), "final slash fired at range (dash)")
 	check(h.pos.x > 9.0, "hero dashed down the lane (x=%.2f)" % h.pos.x)
 	check(g1.life <= 0 or g1.life == 0, "first goblin took 2 hits (life %d)" % g1.life)
-	check(g2.life == 6, "second goblin took 1 hit (life %d)" % g2.life)
+	check(g2.life == 2, "second goblin took 1 hit (life %d)" % g2.life)
 
 
 func test_deck_refill() -> void:
@@ -285,13 +287,42 @@ func test_deck_refill() -> void:
 func test_stun_interrupts_charging() -> void:
 	var sim := _sim()
 	var h := sim.add_actor(_hero("knight", Vector2(10, 20)))
-	var g := sim.add_actor(_monster("goblin", Vector2(10, 21.2)))
+	var g := sim.add_actor(_monster("orc", Vector2(10, 21.2)))
 	sim.setup_deck(h, _cards("full_swing", 0, 30))
 	sim.play_card(h, {"skill": "full_swing", "rank": 0})
+	sim.alert(g)
 	sim.command_target(g, h.id)
 	_run(sim, 0.5)
-	check(not h.is_charging() and h.loaded.is_empty(), "the goblin's attack interrupted the charge")
+	check(not h.is_charging() and h.loaded.is_empty(), "the orc's stunning attack interrupted the charge")
 	check(h.state == Actor.State.STUNNED, "hero is stunned")
+
+
+func test_weak_monsters_do_not_stun_and_wait_for_aggro() -> void:
+	var sim := _sim()
+	var h := sim.add_actor(_hero("warrior", Vector2(10, 20)))
+	var g := sim.add_actor(_monster("goblin", Vector2(10, 21.2)))
+	sim.command_target(g, h.id)
+	_run(sim, 2.0)
+	check(h.life < h.max_life, "goblin still deals damage (life %d)" % h.life)
+	check(h.state == Actor.State.ACTIVE, "goblin basic attacks never stun")
+	# Aggro: a goblin far away ignores the hero until they come close.
+	var sim2 := BattleSim.new(5)
+	var h2 := sim2.add_actor(_hero("warrior", Vector2(5, 30)))
+	var far := sim2.add_actor(_monster("goblin", Vector2(30, 5)))
+	far.think_timer = 0.0
+	var start := far.pos
+	sim2.tick(3.0)
+	check(far.pos.distance_to(start) < 0.1 and not far.aggro, "distant goblin loiters")
+	sim2.command_move(h2, Vector2(26, 8))
+	sim2.tick(12.0)
+	check(far.aggro, "goblin wakes when the hero comes within aggro range")
+	# Being hit wakes a pack.
+	var sim3 := BattleSim.new(6)
+	sim3.add_actor(_hero("warrior", Vector2(5, 30)))
+	var a := sim3.add_actor(_monster("goblin", Vector2(30, 5)))
+	var b := sim3.add_actor(_monster("wolf", Vector2(32, 6)))
+	sim3._apply_hit(sim3.hero(), a, "attack", SkillDB.params("attack", -1), 1, Vector2(1, 0))
+	check(a.aggro and b.aggro, "a hit wakes the monster and its neighbour")
 
 
 func test_rarity_table() -> void:
