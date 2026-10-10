@@ -31,21 +31,21 @@ const SKILLS: Dictionary = {
 		"base": {"priority": 5, "cost": 1, "stun": 1, "mult": 1.0},
 		"ranks": [],
 		"chains": ["attack", "whirlwind"],
-		"desc": "Strike an adjacent enemy for x1 damage. Stun 1. Beats Grab; parried by Defend.",
+		"desc": "Basic strike: x1 damage, Stun 1. Beats Grab; parried by Defend.",
 	},
 	"defend": {
 		"name": "Defend", "weapon": "any", "target": "self",
 		"base": {"priority": 7, "cost": 0, "defend": true},
 		"ranks": [],
 		"chains": [],
-		"desc": "Block all melee damage and status this round. Parries Attack (attacker is Stun 1). Loses to Grab. Guard-break skills still deal half damage.",
+		"desc": "Guard for 2 seconds: blocks melee damage and status. Parries basic attacks (attacker is stunned). Loses to Grab. Guard-break skills still deal half damage.",
 	},
 	"grab": {
 		"name": "Grab", "weapon": "any", "target": "dir",
 		"base": {"priority": 4, "cost": 1, "down": 1, "mult": 0.5, "unblockable": true},
 		"ranks": [],
 		"chains": ["attack"],
-		"desc": "Throw an adjacent enemy to the floor: x0.5 damage, Down 1. Beats Defend; broken if the target Attacks you this round.",
+		"desc": "Throw a nearby enemy to the floor: x0.5 damage, Down 1. Goes straight through Defend.",
 	},
 	"bash": {
 		"name": "Bash", "weapon": "blunt", "target": "dir",
@@ -57,7 +57,7 @@ const SKILLS: Dictionary = {
 			{"exp": 10, "cost": 5, "stun": 5},
 		],
 		"chains": ["attack", "whirlwind"],
-		"desc": "Load 1. Hit an adjacent enemy for x1 damage and Stun {stun}. Cooldown 2.",
+		"desc": "Charge up, then club a nearby enemy for x1 damage and Stun {stun}. Short cooldown.",
 	},
 	"full_swing": {
 		"name": "Full Swing", "weapon": "blunt", "target": "dir",
@@ -69,7 +69,7 @@ const SKILLS: Dictionary = {
 			{"exp": 12, "cost": 5, "mult": 5},
 		],
 		"chains": ["whirlwind", "defend"],
-		"desc": "Load 2. Hit an adjacent enemy for x{mult} damage, Down 2, Knockback 2. Cooldown 2, Immobile 2.",
+		"desc": "Long charge. Smash a nearby enemy for x{mult} damage, Down 2, Knockback 2. Leaves you slow to recover (cooldown, rooted).",
 	},
 	"final_slash": {
 		"name": "Final Slash", "weapon": "sword", "target": "dir",
@@ -81,7 +81,7 @@ const SKILLS: Dictionary = {
 			{"exp": 18, "cost": 8, "split": 10, "hitpct": 7, "charge": 7},
 		],
 		"chains": [],
-		"desc": "Load 2 (immobile). Dash up to {charge} cells through enemies and deal {split} hits of {hitpct}0% damage, split among every enemy in the lane. Cooldown 2.",
+		"desc": "Long charge. Dash through enemies up to {charge} tiles away, dealing {split} hits of {hitpct}0% damage split among everyone in the lane. Cooldown afterwards.",
 	},
 	"whirlwind": {
 		"name": "Whirlwind", "weapon": "melee", "target": "self",
@@ -93,7 +93,7 @@ const SKILLS: Dictionary = {
 			{"exp": 15, "cost": 5, "radius": 4, "mult": 2},
 		],
 		"chains": ["full_swing", "defend"],
-		"desc": "Load 1 (immobile), costs 1 life. Hits every enemy within {radius} cells for x{mult} damage, Down 1, Knockback 2. Invulnerable while spinning. Cooldown 2, Immobile 2.",
+		"desc": "Charge up (costs 1 life). Hits every enemy within {radius} tiles for x{mult} damage, Down 1, Knockback 2. Invulnerable while spinning, then slow to recover.",
 	},
 	"fireball": {
 		"name": "Fireball", "weapon": "staff", "target": "cell",
@@ -105,7 +105,7 @@ const SKILLS: Dictionary = {
 			{"exp": 10, "cost": 6, "mult": 5},
 		],
 		"chains": ["blink"],
-		"desc": "Load 1. Explodes at a cell within 4 for x{mult} damage to every unit within 1 cell. Friends burn too! Ignores Defend.",
+		"desc": "Charge up, then double-tap the ground (or tap an enemy) within 4 tiles: explodes for x{mult} damage to everything nearby. Ignores Defend.",
 	},
 	"frost_nova": {
 		"name": "Frost Nova", "weapon": "staff", "target": "self",
@@ -117,21 +117,21 @@ const SKILLS: Dictionary = {
 			{"exp": 12, "cost": 7, "radius": 3, "stun": 4},
 		],
 		"chains": ["fireball", "blink"],
-		"desc": "Load 1. Freezes every enemy within {radius} cells: x1 damage, Stun {stun}. Ignores Defend. Cooldown 2.",
+		"desc": "Charge up, then freeze every enemy within {radius} tiles: x1 damage, Stun {stun}. Ignores Defend. Short cooldown.",
 	},
 	"blink": {
 		"name": "Blink", "weapon": "staff", "target": "blink",
 		"base": {"priority": 6, "cost": 2, "range": 3, "teleport": true},
 		"ranks": [],
 		"chains": ["fireball"],
-		"desc": "Teleport to an empty cell within 3, during the skill phase (after everyone has moved).",
+		"desc": "Instant. Double-tap the ground to teleport up to 3 tiles away, or tap an enemy to blink next to it.",
 	},
 	"pounce": {
 		"name": "Pounce", "weapon": "any", "target": "dir", "monster_only": true,
 		"base": {"priority": 4, "cost": 2, "charge": 3, "down": 1, "mult": 1.0, "cooldown": 1},
 		"ranks": [],
 		"chains": ["attack"],
-		"desc": "Dash up to 3 cells and bite the first enemy: x1 damage, Down 1. Cooldown 1.",
+		"desc": "Dash up to 3 tiles and bite the first enemy: x1 damage, Down 1.",
 	},
 }
 

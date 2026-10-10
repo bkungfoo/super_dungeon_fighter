@@ -158,6 +158,11 @@ func _deck_editor(h: Dictionary) -> void:
 			var v := UI.vbox(6)
 			p.add_child(v)
 			var head := UI.hbox()
+			var icon := SkillIcon.new()
+			icon.setup(c.skill, c.rank)
+			icon.custom_minimum_size = Vector2(110, 110)
+			icon.size_flags_horizontal = 0
+			head.add_child(icon)
 			var title := UI.label(SkillDB.display_name(c.skill, c.rank))
 			title.add_theme_color_override("font_color", SkillDB.RARITY_COLORS[SkillDB.rarity(c.skill, c.rank)])
 			head.add_child(title)

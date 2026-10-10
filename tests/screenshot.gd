@@ -55,6 +55,14 @@ class Driver extends Node:
 		await _shot("03_town")
 		get_tree().current_scene._deck_editor(k)
 		await _shot("04_deck")
+		get_tree().change_scene_to_file("res://scenes/town.tscn")
+		await _frames(3)
+		get_tree().current_scene._deck_editor(w)
+		await _shot("04b_deck_warrior")
+		get_tree().change_scene_to_file("res://scenes/town.tscn")
+		await _frames(3)
+		get_tree().current_scene._deck_editor(m)
+		await _shot("04c_deck_mage")
 		Session.hero_id = k.id
 		get_tree().change_scene_to_file("res://scenes/setup.tscn")
 		await _shot("05_setup")
@@ -68,8 +76,8 @@ class Driver extends Node:
 		await _sim_seconds(gs, 3.0)
 		await _shot("07_engaging")
 		for b in gs.hand_bar.get_children():
-			if b is Button and not b.disabled and b.text.begins_with("Bash"):
-				b.pressed.emit()
+			if b is Button and not b.disabled and b.get_meta("card").skill == "bash":
+				gs._on_card_pressed(b.get_meta("card"))
 				break
 		await _sim_seconds(gs, 0.5)
 		await _shot("08_charging")
@@ -81,6 +89,11 @@ class Driver extends Node:
 		await _shot("09_skill_fired")
 		await _sim_seconds(gs, 2.5)
 		await _shot("10_mid_battle")
+		for b in gs.hand_bar.get_children():
+			if b is Button:
+				gs._show_card_detail(b.get_meta("card"))
+				break
+		await _shot("10b_card_detail")
 		gs._confirm_retreat()
 		await _shot("11_retreat")
 		get_tree().quit(0)

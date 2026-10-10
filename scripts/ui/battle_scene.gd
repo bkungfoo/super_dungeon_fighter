@@ -48,6 +48,11 @@ var hand_bar: HBoxContainer
 var _hand_sig := ""
 var _log_lines: Array[String] = []
 var _finished := false
+var _card_press_time: float = -1.0
+var _card_press_card: Dictionary = {}
+var _card_detail_shown := false
+const CARD_PX := 190
+const LONG_PRESS := 0.45
 
 
 func _ready() -> void:
@@ -332,9 +337,10 @@ func _build_hud() -> void:
 	charge_bar.visible = false
 	pv.add_child(charge_bar)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 130
+	scroll.custom_minimum_size.y = CARD_PX + 16
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	hand_bar = UI.hbox(12)
+	hand_bar = UI.hbox(14)
+	hand_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	scroll.add_child(hand_bar)
 	pv.add_child(scroll)
 	_refresh_hud()
@@ -378,23 +384,72 @@ func _refresh_hud() -> void:
 		_hand_sig = sig
 		UI.clear_children(hand_bar)
 		for c in hero.hand:
-			var p := SkillDB.params(c.skill, c.rank)
-			var txt := SkillDB.display_name(c.skill, c.rank)
-			var bits: Array[String] = []
-			if p.cost > 0:
-				bits.append("%d st" % p.cost)
-			if p.get("load", 0) > 0:
-				bits.append("%.1fs" % (p.load * BattleSim.SEC_PER_LOAD))
-			if sim.is_chain_available(hero, c.skill):
-				txt = "CHAIN " + txt
-			var b := Button.new()
-			b.text = txt + "\n" + (", ".join(bits) if not bits.is_empty() else "instant")
-			b.theme_type_variation = "SkillButton"
-			b.custom_minimum_size.x = 200
-			b.disabled = not sim.card_playable(hero, c)
-			b.add_theme_color_override("font_color", SkillDB.RARITY_COLORS[SkillDB.rarity(c.skill, c.rank)])
-			b.pressed.connect(_on_card_pressed.bind(c))
-			hand_bar.add_child(b)
+			hand_bar.add_child(_card_button(c))
+
+
+## A square icon card. Tap to play; hold to read what it does.
+func _card_button(card: Dictionary) -> Button:
+	var b := Button.new()
+	b.theme_type_variation = "SkillButton"
+	b.custom_minimum_size = Vector2(CARD_PX, CARD_PX)
+	b.disabled = not sim.card_playable(hero, card)
+	b.set_meta("card", card)
+	var icon := SkillIcon.new()
+	icon.setup(card.skill, card.rank)
+	icon.chain = sim.is_chain_available(hero, card.skill)
+	icon.dimmed = b.disabled
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(icon)
+	b.button_down.connect(_on_card_down.bind(card))
+	b.button_up.connect(_on_card_up.bind(card))
+	return b
+
+
+func _on_card_down(card: Dictionary) -> void:
+	_card_press_time = _now()
+	_card_press_card = card
+	_card_detail_shown = false
+
+
+func _on_card_up(card: Dictionary) -> void:
+	if _card_detail_shown or _card_press_time < 0.0:
+		_card_press_time = -1.0
+		return
+	_card_press_time = -1.0
+	_on_card_pressed(card)
+
+
+func _show_card_detail(card: Dictionary) -> void:
+	_card_detail_shown = true
+	var md := UI.modal(hud_root, SkillDB.display_name(card.skill, card.rank))
+	var row := UI.hbox(24)
+	var icon := SkillIcon.new()
+	icon.setup(card.skill, card.rank)
+	icon.custom_minimum_size = Vector2(220, 220)
+	icon.size_flags_horizontal = 0
+	row.add_child(icon)
+	var v := UI.vbox(8)
+	var p := SkillDB.params(card.skill, card.rank)
+	var bits: Array[String] = ["%s card" % SkillDB.rarity_name(card.skill, card.rank)]
+	bits.append("Stamina: %d" % p.get("cost", 0))
+	if p.get("load", 0) > 0:
+		bits.append("Charge: %.1f s" % (p.load * BattleSim.SEC_PER_LOAD))
+	else:
+		bits.append("Instant")
+	if p.get("cooldown", 0) > 0:
+		bits.append("Cooldown: %.1f s" % (p.cooldown * BattleSim.SEC_PER_COOLDOWN))
+	v.add_child(UI.label("\n".join(bits), "SmallLabel"))
+	row.add_child(v)
+	md.vbox.add_child(row)
+	md.vbox.add_child(UI.label(SkillDB.describe(card.skill, card.rank), "DimLabel"))
+	var def := SkillDB.get_def(card.skill)
+	if not def.chains.is_empty():
+		var names: Array[String] = []
+		for c in def.chains:
+			names.append(SkillDB.get_def(c).name)
+		md.vbox.add_child(UI.label("Chains into: " + ", ".join(names), "SmallLabel"))
+	md.vbox.add_child(UI.button("Close", func(): md.overlay.queue_free()))
 
 
 func _on_card_pressed(card: Dictionary) -> void:
@@ -514,6 +569,8 @@ func _click(screen: Vector2) -> void:
 func _process(delta: float) -> void:
 	if sim == null or hero == null:
 		return
+	if _card_press_time >= 0.0 and not _card_detail_shown and _now() - _card_press_time > LONG_PRESS:
+		_show_card_detail(_card_press_card)
 	if not _finished:
 		sim.tick(delta * time_scale)
 		var w := sim.winner()

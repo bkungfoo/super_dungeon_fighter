@@ -93,7 +93,7 @@ class Driver extends Node:
 		if hero.loaded.is_empty() and not hero.is_charging():
 			for b in gs.hand_bar.get_children():
 				if b is Button and not b.disabled and gs.sim.rng.randf() < 0.6:
-					b.pressed.emit()
+					gs._on_card_pressed(b.get_meta("card"))
 					break
 		var e: Actor = gs.sim.nearest_enemy(hero)
 		if e == null:
