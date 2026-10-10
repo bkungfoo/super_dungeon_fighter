@@ -1,9 +1,12 @@
 # Super Dungeon Fighter
 
 A simultaneous-reveal tactics brawler built in **Godot 4.7** for iPhone and iPad
-(it also runs on Android and desktop). Heroes of Halud pick their moves and
-skills face down, the Dark Lord's monsters do the same, and everything resolves
-at once: positioning, prediction and combo chains decide the fight. No dice.
+(it also runs on Android and desktop). Each hero brings a 30-card deck of
+skills and holds a hand of 5. Heroes plan a move and a card face down, the
+Dark Lord's monsters do the same, and everything resolves at once in priority
+order: positioning, prediction and combo chains decide the fight. No dice.
+Clearing a dungeon earns every hero a random card; deeper dungeons drop rarer,
+stronger cards.
 
 The design comes from `Super_Dungeon_Fighter_Board_Game.pdf`; the complete
 rules as implemented, including every gap the document left open, are in
@@ -15,11 +18,11 @@ rules as implemented, including every gap the document left open, are in
 |---|---|
 | `scripts/core/game_engine.gd` | The rules engine: phases, movement, skills, combo state machine, chains. Pure GDScript, no scene nodes. |
 | `scripts/core/dm_ai.gd` | The Dungeon Master AI: summons monsters, lays walls, plays them each round. |
-| `scripts/core/save_data.gd` | Persistent roster (levels, XP, skill points, skills) and Dark Lord progression. JSON in `user://`. |
+| `scripts/core/save_data.gd` | Persistent roster (levels, XP, card collections, decks), card rewards, and Dark Lord progression. JSON in `user://`. |
 | `scripts/core/session.gd` | Runtime state shared between scenes (party, difficulty, last result). |
 | `scripts/core/unit.gd`, `board_grid.gd` | Unit and grid data. |
-| `scripts/data/skill_db.gd` | The skill table (ranks C/B/A/S, costs, chains, descriptions). |
-| `scripts/data/hero_db.gd`, `monster_db.gd` | Hero classes and the monster roster. |
+| `scripts/data/skill_db.gd` | The skill table (ranks C/B/A/S, costs, priority, chains) and the card rarity formula. |
+| `scripts/data/hero_db.gd`, `monster_db.gd` | Hero classes with starter decks, and the monster roster. |
 | `scripts/ui/*.gd`, `scenes/*.tscn` | Touch UI: main menu, town, run setup, the dungeon screen. |
 | `tests/run_tests.gd` | Headless rules tests and AI-vs-AI fuzzing. |
 | `tests/smoke_ui.*`, `tests/screenshot.*` | Drive the real scenes end to end; the latter saves screenshots. |

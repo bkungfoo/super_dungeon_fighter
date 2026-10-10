@@ -1,7 +1,7 @@
 class_name DMAI
 extends RefCounted
 ## The Dungeon Master: builds the dungeon and plays the monsters. The same
-## order functions work for either team, which lets tests run AI vs AI.
+## planner works for either team, which lets tests run AI vs AI.
 
 var rng: RandomNumberGenerator
 
@@ -19,7 +19,6 @@ func choose_monsters(budget: int, dm_level: int) -> Array[String]:
 	var pool := MonsterDB.available(dm_level)
 	var picks: Array[String] = []
 	var left := budget
-	# A boss is always summoned if it fits and the DM is strong enough.
 	for k in pool:
 		var d := MonsterDB.get_def(k)
 		if d.get("boss", false) and d.value <= left and rng.randf() < 0.75:
@@ -36,7 +35,6 @@ func choose_monsters(budget: int, dm_level: int) -> Array[String]:
 				options.append(k)
 		if options.is_empty():
 			break
-		# Bias toward spending points on bigger monsters when affordable.
 		var weighted: Array[String] = []
 		for k in options:
 			for i in MonsterDB.get_def(k).value:
@@ -75,7 +73,6 @@ func build_dungeon(engine: GameEngine, monster_keys: Array[String], wall_count: 
 		u.pos = spawn_cells[i]
 		spawn_cells.remove_at(i)
 		engine.add_unit(u)
-	# Number duplicate monsters so the log is readable.
 	var counts := {}
 	for u in engine.living(Unit.TEAM_MONSTERS):
 		counts[u.cls] = counts.get(u.cls, 0) + 1
@@ -86,7 +83,7 @@ func build_dungeon(engine: GameEngine, monster_keys: Array[String], wall_count: 
 			u.name = "%s %d" % [u.name, seen[u.cls]]
 
 
-# ------------------------------------------------------------------ orders
+# ------------------------------------------------------------------ helpers
 
 func _enemies(engine: GameEngine, team: int) -> Array:
 	return engine.living(1 - team)
@@ -99,6 +96,18 @@ func _nearest_enemy_dist(engine: GameEngine, c: Vector2i, team: int) -> int:
 	return best
 
 
+func _nearest_enemy(engine: GameEngine, c: Vector2i, team: int) -> Unit:
+	var best: Unit = null
+	var bd := 999
+	for e in _enemies(engine, team):
+		var d := BoardGrid.manhattan(c, e.pos)
+		if d < bd:
+			bd = d
+			best = e
+	return best
+
+
+## First direction from `from` whose lane (up to `reach`) contains an enemy.
 func _charge_target_dir(engine: GameEngine, u: Unit, from: Vector2i, reach: int) -> Vector2i:
 	for d in GameEngine.DIRS:
 		var c := from
@@ -107,169 +116,229 @@ func _charge_target_dir(engine: GameEngine, u: Unit, from: Vector2i, reach: int)
 			if not engine.grid.passable(c):
 				break
 			var v := engine.unit_at(c)
-			if v != null:
+			if v != null and v != u:
 				if v.team != u.team:
 					return d
 				break
 	return Vector2i.ZERO
 
 
+func _adjacent_enemies(engine: GameEngine, u: Unit, from: Vector2i) -> Array:
+	var out: Array = []
+	for d in GameEngine.DIRS:
+		var v := engine.unit_at(from + d)
+		if v != null and v.team != u.team:
+			out.append(v)
+	return out
+
+
 func _max_charge(engine: GameEngine, u: Unit) -> int:
 	var best := 0
-	for sid in u.skills:
-		var p := SkillDB.params(sid, u.skills[sid])
+	for c in engine.hand(u):
+		var p := SkillDB.params(c.skill, c.rank)
 		if p.has("charge"):
 			best = maxi(best, p.charge)
 	return best
 
 
-## Movement orders for every unit on `team`: unit_id -> destination.
-func move_orders(engine: GameEngine, team: int) -> Dictionary:
-	var orders := {}
+func _best_move(engine: GameEngine, u: Unit, claimed: Dictionary) -> Vector2i:
+	var opts := engine.movement_options(u)
+	var best_cell: Vector2i = u.pos
+	var best_score := -INF
+	var candidates: Array = opts.keys()
+	candidates.append(u.pos)
+	var charge := _max_charge(engine, u)
+	for c in candidates:
+		if claimed.has(c) and c != u.pos:
+			continue
+		var dist := _nearest_enemy_dist(engine, c, u.team)
+		var score := -dist * 10.0
+		if dist == 1:
+			score += 25.0
+		if charge > 0 and _charge_target_dir(engine, u, c, charge) != Vector2i.ZERO:
+			score += 18.0 - dist
+		if u.weapon == "staff" and dist == 1:
+			score -= 20.0
+		if u.weapon == "staff" and dist >= 2 and dist <= 3:
+			score += 12.0
+		if c == u.pos:
+			score += 1.0
+		score += rng.randf() * 4.0
+		if score > best_score:
+			best_score = score
+			best_cell = c
+	return best_cell
+
+
+## Fills in aim_dir / aim_cell for a skill fired from `from`. Returns false if
+## there is nothing worth aiming at.
+func _aim(engine: GameEngine, u: Unit, sid: String, rank: int, from: Vector2i, o: Dictionary) -> bool:
+	var def := SkillDB.get_def(sid)
+	var p := SkillDB.params(sid, rank)
+	match def.target:
+		"dir":
+			if p.has("charge"):
+				var d := _charge_target_dir(engine, u, from, p.charge)
+				if d != Vector2i.ZERO:
+					o.aim_dir = d
+					return true
+				return false
+			var adj := _adjacent_enemies(engine, u, from)
+			if adj.is_empty():
+				var e := _nearest_enemy(engine, from, u.team)
+				if e == null:
+					return false
+				o.aim_dir = GameEngine.dir_to(from, e.pos)
+				return false
+			var target: Unit = adj[0]
+			for v in adj:
+				if v.life < target.life:
+					target = v
+			o.aim_dir = GameEngine.dir_to(from, target.pos)
+			return true
+		"cell":
+			var best_cell := Vector2i(-1, -1)
+			var best_n := 0
+			for c in engine.skill_targets(u, sid, rank, from):
+				var n := 0
+				for v in engine.living():
+					if v == u:
+						continue
+					if BoardGrid.chebyshev(v.pos, c) <= p.get("radius", 0):
+						n += 1 if v.team != u.team else -2
+				if n > best_n:
+					best_n = n
+					best_cell = c
+			if best_n > 0:
+				o.aim_cell = best_cell
+				return true
+			return false
+		"blink":
+			var best_cell := from
+			var best_d := _nearest_enemy_dist(engine, from, u.team)
+			for c in engine.skill_targets(u, sid, rank, from):
+				var dd := _nearest_enemy_dist(engine, c, u.team)
+				if dd > best_d:
+					best_d = dd
+					best_cell = c
+			if best_cell != from:
+				o.aim_cell = best_cell
+				return true
+			return false
+	return true
+
+
+# ------------------------------------------------------------------ orders
+
+## One order per unit on `team`: see GameEngine.resolve_round for the format.
+func orders(engine: GameEngine, team: int) -> Dictionary:
+	var out := {}
 	var claimed := {}
 	for u in engine.living(team):
-		if not engine.can_move(u):
-			continue
-		var opts := engine.movement_options(u)
-		var best_cell: Vector2i = u.pos
-		var best_score := -INF
-		var candidates: Array = opts.keys()
-		candidates.append(u.pos)
-		var charge := _max_charge(engine, u)
-		for c in candidates:
-			if claimed.has(c) and c != u.pos:
-				continue
-			var dist := _nearest_enemy_dist(engine, c, team)
-			var score := -dist * 10.0
-			if dist == 1:
-				score += 25.0
-			if charge > 0 and _charge_target_dir(engine, u, c, charge) != Vector2i.ZERO:
-				score += 18.0 - dist
-			# Casters keep a little distance.
-			if u.weapon == "staff" and dist == 1:
-				score -= 20.0
-			if u.weapon == "staff" and dist >= 2 and dist <= 3:
-				score += 12.0
-			if c == u.pos:
-				score += 1.0
-			score += rng.randf() * 4.0
-			if score > best_score:
-				best_score = score
-				best_cell = c
-		claimed[best_cell] = true
-		orders[u.id] = best_cell
-	return orders
+		var o := _plan_unit(engine, u, claimed)
+		if not o.is_empty():
+			out[u.id] = o
+	return out
 
 
-## Skill orders for every unit on `team`: unit_id -> {"skill", "cell"}.
-func skill_orders(engine: GameEngine, team: int) -> Dictionary:
-	var orders := {}
-	for u in engine.living(team):
-		var pick := _pick_skill(engine, u)
-		if not pick.is_empty():
-			orders[u.id] = pick
-	return orders
+func _plan_unit(engine: GameEngine, u: Unit, claimed: Dictionary) -> Dictionary:
+	var o := {}
+	var dest: Vector2i = u.pos
+	if engine.can_move(u):
+		dest = _best_move(engine, u, claimed)
+	claimed[dest] = true
 
+	if engine.is_ready(u):
+		if dest != u.pos:
+			o.move = dest
+		_aim(engine, u, u.loading.skill, u.loading.rank, dest, o)
+		return o
 
-func _pick_skill(engine: GameEngine, u: Unit) -> Dictionary:
-	var avail := engine.available_skills(u)
-	if avail.is_empty():
-		return {}
-	var candidates: Array = []  # {skill, cell, weight}
-	var adjacent_enemies: Array = []
-	for d in GameEngine.DIRS:
-		var v := engine.unit_at(u.pos + d)
-		if v != null and v.team != u.team:
-			adjacent_enemies.append(v)
 	var low_life: bool = u.life * 100 < u.max_life * 40
-
-	for sid in avail:
-		var def := SkillDB.get_def(sid)
-		var p := SkillDB.params(sid, u.skills[sid])
+	var candidates: Array = []
+	var seen := {}
+	for c in engine.playable_cards(u):
+		var key := SkillDB.card_key(c.skill, c.rank)
+		if seen.has(key):
+			continue
+		seen[key] = true
+		var p := SkillDB.params(c.skill, c.rank)
+		var def := SkillDB.get_def(c.skill)
+		var from: Vector2i = u.pos if p.get("load", 0) > 0 else dest
+		var aim := {}
+		var has_target := _aim(engine, u, c.skill, c.rank, from, aim)
+		var adj := _adjacent_enemies(engine, u, from)
 		var dmg: int = int(round(u.attack * float(p.mult)))
 		var applies_status: bool = p.get("stun", 0) > 0 or p.get("down", 0) > 0
-		match def.target:
-			"self":
-				if p.get("defend", false):
-					var w := 2.0
-					if not adjacent_enemies.is_empty():
-						w = 10.0
-					if low_life:
-						w += 8.0
-					# Guarding is wise while an enemy is charging something.
-					for e in adjacent_enemies:
-						if not e.loading.is_empty():
-							w += 10.0
-					candidates.append({"skill": sid, "cell": u.pos, "weight": w})
-				elif p.has("radius"):
-					var n := 0
-					for e in _enemies(engine, u.team):
-						if BoardGrid.manhattan(e.pos, u.pos) <= p.radius:
-							n += 1
-					if n > 0:
-						var w := 12.0 * n * (1.0 if p.get("load", 0) == 0 else 0.8)
-						if p.get("life_cost", 0) > 0 and low_life:
-							w *= 0.3
-						candidates.append({"skill": sid, "cell": u.pos, "weight": w})
-			"dir":
-				if p.has("charge"):
-					var d := _charge_target_dir(engine, u, u.pos, p.charge)
-					if d != Vector2i.ZERO:
-						candidates.append({"skill": sid, "cell": u.pos + d, "weight": 28.0 + dmg})
-				else:
-					for e in adjacent_enemies:
-						var w := 30.0
-						if sid == "grab":
-							w = 16.0
-						elif sid != "attack":
-							w = 22.0 + dmg
-						if p.get("load", 0) > 0:
-							w *= 0.8
-						if dmg >= e.life and p.get("load", 0) == 0:
-							w *= 3.0
-						elif applies_status and e.state == Unit.State.DOWN:
-							w *= 0.1  # kicking while down hands them a Reset
-						elif applies_status and e.state == Unit.State.STUNNED:
-							w *= 1.4  # stun -> down combo
-						if e.defending and sid == "attack":
-							w *= 0.5
-						candidates.append({"skill": sid, "cell": e.pos, "weight": w})
-			"cell":
-				var best_cell := Vector2i(-1, -1)
-				var best_n := 0
-				for c in engine.skill_targets(u, sid):
-					var n := 0
-					for v in engine.living():
-						if v == u:
-							continue
-						if BoardGrid.chebyshev(v.pos, c) <= p.get("radius", 0):
-							n += 1 if v.team != u.team else -2
-					if n > best_n:
-						best_n = n
-						best_cell = c
-				if best_n > 0:
-					candidates.append({"skill": sid, "cell": best_cell, "weight": 14.0 * best_n})
-			"blink":
-				if not adjacent_enemies.is_empty() and low_life:
-					var cells := engine.skill_targets(u, sid)
-					var best_cell: Vector2i = u.pos
-					var best_d := -1
-					for c in cells:
-						var dd := _nearest_enemy_dist(engine, c, u.team)
-						if dd > best_d:
-							best_d = dd
-							best_cell = c
-					if best_cell != u.pos:
-						candidates.append({"skill": sid, "cell": best_cell, "weight": 15.0})
-	if candidates.is_empty():
-		return {}
+		var w := 0.0
+		if p.get("defend", false):
+			w = 2.0
+			if not adj.is_empty():
+				w = 10.0
+			if low_life:
+				w += 8.0
+			for e in adj:
+				if not e.loading.is_empty():
+					w += 10.0
+		elif p.get("teleport", false):
+			w = 15.0 if (has_target and low_life and not _adjacent_enemies(engine, u, u.pos).is_empty()) else 0.0
+		elif def.target == "self" and p.has("radius"):
+			var n := 0
+			for e in _enemies(engine, u.team):
+				if BoardGrid.manhattan(e.pos, from) <= p.radius:
+					n += 1
+			w = 12.0 * n * (1.0 if p.get("load", 0) == 0 else 0.8)
+			if p.get("life_cost", 0) > 0 and low_life:
+				w *= 0.3
+		elif def.target == "cell":
+			w = 14.0 * 2 if has_target else 0.0
+		elif has_target:
+			var e: Unit = engine.unit_at(from + aim.get("aim_dir", Vector2i.ZERO))
+			if p.has("charge"):
+				w = 28.0 + dmg
+			else:
+				w = 30.0
+				if c.skill == "grab":
+					w = 16.0
+				elif c.skill != "attack":
+					w = 22.0 + dmg
+				if p.get("load", 0) > 0:
+					w *= 0.8
+				if e != null:
+					if dmg >= e.life and p.get("load", 0) == 0:
+						w *= 3.0
+					elif applies_status and e.state == Unit.State.DOWN:
+						w *= 0.1
+					elif applies_status and e.state == Unit.State.STUNNED:
+						w *= 1.4
+					if e.defending and c.skill == "attack":
+						w *= 0.5
+		if w > 0.0:
+			candidates.append({"card": c, "weight": w, "from": from, "aim": aim})
+
+	var move_w := 1.0
+	if dest != u.pos:
+		move_w = 30.0 if _adjacent_enemies(engine, u, dest).is_empty() else 6.0
+	candidates.append({"move_only": true, "weight": move_w})
+
 	var total := 0.0
 	for c in candidates:
 		total += c.weight
 	var roll := rng.randf() * total
+	var pick: Dictionary = candidates[candidates.size() - 1]
 	for c in candidates:
 		roll -= c.weight
 		if roll <= 0.0:
-			return {"skill": c.skill, "cell": c.cell}
-	var last: Dictionary = candidates[candidates.size() - 1]
-	return {"skill": last.skill, "cell": last.cell}
+			pick = c
+			break
+	if pick.get("move_only", false):
+		if dest != u.pos:
+			o.move = dest
+		return o
+	o.skill = pick.card.skill
+	o.rank = pick.card.rank
+	if pick.from == dest and dest != u.pos:
+		o.move = dest
+	for k in pick.aim:
+		o[k] = pick.aim[k]
+	return o

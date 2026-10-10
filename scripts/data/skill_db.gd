@@ -17,34 +17,39 @@ extends RefCounted
 ##   guard_break halves damage vs Defend instead of being blocked
 ##   unblockable ignores Defend entirely  ranged  ignores Defend (spells)
 ##   defend      marks the user as defending   teleport   Blink
+##   priority    resolution order in the skill phase (higher fires first)
 
 const RANK_NAMES: Array[String] = ["C", "B", "A", "S"]
+const RARITY_NAMES: Array[String] = ["Common", "Uncommon", "Rare", "Epic"]
+const RARITY_COLORS: Array[Color] = [Color(0.8, 0.8, 0.8), Color(0.45, 0.85, 0.5), Color(0.4, 0.65, 1.0), Color(0.85, 0.5, 1.0)]
+## Power-score thresholds for Uncommon / Rare / Epic.
+const RARITY_THRESHOLDS: Array[float] = [3.2, 5.0, 6.8]
 
 const SKILLS: Dictionary = {
 	"attack": {
 		"name": "Attack", "weapon": "melee", "target": "dir",
-		"base": {"cost": 1, "stun": 1, "mult": 1.0},
+		"base": {"priority": 5, "cost": 1, "stun": 1, "mult": 1.0},
 		"ranks": [],
 		"chains": ["attack", "whirlwind"],
 		"desc": "Strike an adjacent enemy for x1 damage. Stun 1. Beats Grab; parried by Defend.",
 	},
 	"defend": {
 		"name": "Defend", "weapon": "any", "target": "self",
-		"base": {"cost": 0, "defend": true},
+		"base": {"priority": 7, "cost": 0, "defend": true},
 		"ranks": [],
 		"chains": [],
 		"desc": "Block all melee damage and status this round. Parries Attack (attacker is Stun 1). Loses to Grab. Guard-break skills still deal half damage.",
 	},
 	"grab": {
 		"name": "Grab", "weapon": "any", "target": "dir",
-		"base": {"cost": 1, "down": 1, "mult": 0.5, "unblockable": true},
+		"base": {"priority": 4, "cost": 1, "down": 1, "mult": 0.5, "unblockable": true},
 		"ranks": [],
 		"chains": ["attack"],
 		"desc": "Throw an adjacent enemy to the floor: x0.5 damage, Down 1. Beats Defend; broken if the target Attacks you this round.",
 	},
 	"bash": {
 		"name": "Bash", "weapon": "blunt", "target": "dir",
-		"base": {"load": 1, "cooldown": 2, "mult": 1.0},
+		"base": {"priority": 3, "load": 1, "cooldown": 2, "mult": 1.0},
 		"ranks": [
 			{"exp": 1, "cost": 2, "stun": 2},
 			{"exp": 3, "cost": 3, "stun": 3},
@@ -56,7 +61,7 @@ const SKILLS: Dictionary = {
 	},
 	"full_swing": {
 		"name": "Full Swing", "weapon": "blunt", "target": "dir",
-		"base": {"load": 2, "down": 2, "knockback": 2, "cooldown": 2, "immobile": 2, "guard_break": true},
+		"base": {"priority": 1, "load": 2, "down": 2, "knockback": 2, "cooldown": 2, "immobile": 2, "guard_break": true},
 		"ranks": [
 			{"exp": 1, "cost": 2, "mult": 2},
 			{"exp": 5, "cost": 3, "mult": 3},
@@ -68,7 +73,7 @@ const SKILLS: Dictionary = {
 	},
 	"final_slash": {
 		"name": "Final Slash", "weapon": "sword", "target": "dir",
-		"base": {"load": 2, "load_immobile": true, "cooldown": 2, "guard_break": true},
+		"base": {"priority": 2, "load": 2, "load_immobile": true, "cooldown": 2, "guard_break": true},
 		"ranks": [
 			{"exp": 3, "cost": 2, "split": 3, "hitpct": 10, "charge": 4},
 			{"exp": 7, "cost": 4, "split": 5, "hitpct": 9, "charge": 5},
@@ -80,7 +85,7 @@ const SKILLS: Dictionary = {
 	},
 	"whirlwind": {
 		"name": "Whirlwind", "weapon": "melee", "target": "self",
-		"base": {"load": 1, "load_immobile": true, "knockback": 2, "down": 1, "invuln": 1, "cooldown": 2, "immobile": 2, "life_cost": 1, "guard_break": true},
+		"base": {"priority": 2, "load": 1, "load_immobile": true, "knockback": 2, "down": 1, "invuln": 1, "cooldown": 2, "immobile": 2, "life_cost": 1, "guard_break": true},
 		"ranks": [
 			{"exp": 1, "cost": 2, "radius": 2, "mult": 1},
 			{"exp": 5, "cost": 3, "radius": 3, "mult": 1},
@@ -92,7 +97,7 @@ const SKILLS: Dictionary = {
 	},
 	"fireball": {
 		"name": "Fireball", "weapon": "staff", "target": "cell",
-		"base": {"load": 1, "range": 4, "radius": 1, "ranged": true},
+		"base": {"priority": 2, "load": 1, "range": 4, "radius": 1, "ranged": true},
 		"ranks": [
 			{"exp": 2, "cost": 3, "mult": 2},
 			{"exp": 4, "cost": 4, "mult": 3},
@@ -104,7 +109,7 @@ const SKILLS: Dictionary = {
 	},
 	"frost_nova": {
 		"name": "Frost Nova", "weapon": "staff", "target": "self",
-		"base": {"load": 1, "cooldown": 2, "mult": 1, "ranged": true},
+		"base": {"priority": 3, "load": 1, "cooldown": 2, "mult": 1, "ranged": true},
 		"ranks": [
 			{"exp": 2, "cost": 4, "radius": 2, "stun": 2},
 			{"exp": 5, "cost": 5, "radius": 2, "stun": 3},
@@ -116,14 +121,14 @@ const SKILLS: Dictionary = {
 	},
 	"blink": {
 		"name": "Blink", "weapon": "staff", "target": "blink",
-		"base": {"cost": 2, "range": 3, "teleport": true},
+		"base": {"priority": 6, "cost": 2, "range": 3, "teleport": true},
 		"ranks": [],
 		"chains": ["fireball"],
 		"desc": "Teleport to an empty cell within 3, during the skill phase (after everyone has moved).",
 	},
 	"pounce": {
-		"name": "Pounce", "weapon": "any", "target": "dir",
-		"base": {"cost": 2, "charge": 3, "down": 1, "mult": 1.0, "cooldown": 1},
+		"name": "Pounce", "weapon": "any", "target": "dir", "monster_only": true,
+		"base": {"priority": 4, "cost": 2, "charge": 3, "down": 1, "mult": 1.0, "cooldown": 1},
 		"ranks": [],
 		"chains": ["attack"],
 		"desc": "Dash up to 3 cells and bite the first enemy: x1 damage, Down 1. Cooldown 1.",
@@ -182,6 +187,65 @@ static func describe(skill_id: String, rank: int) -> String:
 			v = str(int(v)) if v == floor(v) else str(v)
 		text = text.replace("{%s}" % k, str(v))
 	return text
+
+
+# ------------------------------------------------------------------ cards
+
+static func card_key(skill_id: String, rank: int) -> String:
+	return "%s:%d" % [skill_id, rank]
+
+
+static func parse_key(key: String) -> Dictionary:
+	var parts := key.split(":")
+	return {"skill": parts[0], "rank": int(parts[1]) if parts.size() > 1 else -1}
+
+
+## Every card that can exist (rankless skills have rank -1). Monster-only
+## skills are excluded.
+static func all_cards() -> Array:
+	var out: Array = []
+	for sid in SKILLS:
+		if SKILLS[sid].get("monster_only", false):
+			continue
+		if has_ranks(sid):
+			for r in SKILLS[sid].ranks.size():
+				out.append({"skill": sid, "rank": r})
+		else:
+			out.append({"skill": sid, "rank": -1})
+	return out
+
+
+## Average strength of a card: expected damage (hits x multiplier x area),
+## status strength, and resolution priority, minus a penalty for load time.
+## Cards with higher damage and higher priority score higher and are rarer.
+static func power_score(skill_id: String, rank: int) -> float:
+	var p := params(skill_id, rank)
+	var dmg: float = float(p.mult)
+	if p.has("split"):
+		dmg = p.split * p.hitpct / 10.0
+	var area := 1.0
+	if p.has("radius"):
+		area = 2.0 if SKILLS[skill_id].target == "cell" else 1.0 + 0.5 * p.radius
+	if p.has("charge"):
+		area += 0.3
+	if p.get("defend", false) or p.get("teleport", false):
+		dmg = 0.0
+	var status: float = 0.8 * p.get("stun", 0) + 0.8 * p.get("down", 0) + (0.5 if p.get("knockback", 0) > 0 else 0.0)
+	var speed: float = 0.25 * p.get("priority", 0) - 0.5 * p.get("load", 0)
+	return dmg * area + status + speed
+
+
+static func rarity(skill_id: String, rank: int) -> int:
+	var score := power_score(skill_id, rank)
+	var r := 0
+	for t in RARITY_THRESHOLDS:
+		if score >= t:
+			r += 1
+	return r
+
+
+static func rarity_name(skill_id: String, rank: int) -> String:
+	return RARITY_NAMES[rarity(skill_id, rank)]
 
 
 static func display_name(skill_id: String, rank: int) -> String:

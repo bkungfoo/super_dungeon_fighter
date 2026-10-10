@@ -13,6 +13,7 @@ const GRID_LINE := Color(0.14, 0.13, 0.19)
 var engine: GameEngine
 var highlights: Dictionary = {}       # Vector2i -> Color
 var move_arrows: Dictionary = {}      # unit_id -> Vector2i dest
+var aim_marks: Dictionary = {}        # unit_id -> Vector2i aimed cell
 var plan_labels: Dictionary = {}      # unit_id -> String
 var selected_id: int = -1
 var _anim_pos: Dictionary = {}        # unit_id -> Vector2 (cell coordinates, fractional)
@@ -169,6 +170,11 @@ func _draw() -> void:
 		var b := cell_center(Vector2(move_arrows[id]))
 		draw_line(a, b, Color(1, 1, 1, 0.6), 5.0)
 		draw_circle(b, cs * 0.12, Color(1, 1, 1, 0.8))
+
+	for id in aim_marks:
+		var c: Vector2i = aim_marks[id]
+		var r := cell_rect(c).grow(-cs * 0.12)
+		draw_rect(r, Color(1, 0.4, 0.3, 0.9), false, 5.0)
 
 	# Units.
 	var fs_big := int(cs * 0.34)

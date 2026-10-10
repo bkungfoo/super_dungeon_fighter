@@ -1,11 +1,15 @@
 extends Control
 
-const RULES_TEXT := """[b]Super Dungeon Fighter[/b] is D&D, chess, poker and a fighting game rolled into one. No dice: every unit secretly picks a move and a skill, then everything is revealed and resolved at once.
+const RULES_TEXT := """[b]Super Dungeon Fighter[/b] is D&D, chess, poker and a fighting game rolled into one. No dice: every unit secretly plans its turn, then everything is revealed and resolved at once.
 
-[b]A round[/b]
-1. Charged skills: skills with load time gain a counter; ready ones fire first (random priority).
-2. Movement: tap a hero, tap a destination. Reveal moves. Everyone moves at the same time.
-3. Skills: tap a hero, pick a skill card, tap a target. Reveal skills. Everything resolves together.
+[b]Your deck[/b]
+Each hero brings a 30-card deck and holds 5 cards. Every round you may play one card from your hand; it goes to the discard pile and you draw back up to 5. Win a dungeon and each hero earns a random card. Higher dungeon levels drop rarer cards; cards with more damage and higher priority are rarer.
+
+[b]A turn[/b]
+Tap a hero, tap a blue cell to move, tap a card, tap a red cell to aim. Instant cards (Attack, Defend, Grab, Blink) can be played in the same turn as a move, aimed from where you land. Charge-up cards are played standing still; while they charge you may move unless the card says "immobile". Once charged, you move and the skill fires in the same turn.
+
+[b]Resolution[/b]
+All moves happen at once, then skills fire from highest priority to lowest (ties by die roll, Reset units first). A unit stunned or knocked down before its skill fires loses it.
 
 [b]Counters[/b]
 Attack beats Grab (an attack aimed at a grabber breaks the grab). Grab beats Defend (unblockable). Defend beats Attack (blocked and the attacker is parried: Stun 1). Big swings are guard-breaks: Defend only halves them. Spells ignore Defend.
@@ -14,13 +18,10 @@ Attack beats Grab (an attack aimed at a grabber breaks the grab). Grab beats Def
 Active -> Stun X: skip X rounds. Stunned + any stun or down -> Down. Down + any stun or down -> RESET: the victim springs up, is immune to stun and down for a while, and acts first next round. Don't kick people while they're down unless it kills them.
 
 [b]Chains[/b]
-After a skill with a chain list resolves, you may play a chained skill next round even while on cooldown. Full Swing -> Whirlwind -> Full Swing is a classic knight loop.
-
-[b]Load, cooldown, immobile[/b]
-Load N: the skill fires N rounds later in the charged phase. Being stunned or knocked down interrupts it. Cooldown N: no skills for N rounds (except chains). Immobile N: no movement.
+After a skill with a chain list resolves, you may play a chained card next round even while on cooldown. Full Swing -> Whirlwind -> Full Swing is a classic knight loop.
 
 [b]Town[/b]
-Heroes keep levels, XP and skills between runs. Spend skill points to learn and rank up skills (C, B, A, S). The Dark Lord levels too, unlocking nastier monsters.
+Heroes keep levels, XP and their card collections between runs. Build your 30-card deck from the collection. The Dark Lord levels too, unlocking nastier monsters.
 """
 
 

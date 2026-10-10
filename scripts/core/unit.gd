@@ -27,6 +27,12 @@ var summon_value: int = 1
 var is_boss: bool = false
 var hero_id: int = -1         # roster id for heroes, -1 for monsters
 
+# ---- deck (heroes only; monsters play straight from their skill list) ----
+var uses_deck: bool = false
+var deck: Array = []          # Array of cards {skill, rank}
+var hand: Array = []
+var discard: Array = []
+
 # ---- combat state ----
 var state: int = State.ACTIVE
 var tokens: int = 0           # remaining stun / down tokens
@@ -36,7 +42,7 @@ var cooldown: int = 0
 var immobile: int = 0
 var invuln: int = 0
 var defending: bool = false
-var loading: Dictionary = {}  # {skill, rank, dir, cell, counters, need, immobile}
+var loading: Dictionary = {}  # {skill, rank, dir, cell, counters, need, immobile, ready}
 var chain_allowed: Array = []
 var chain_expires: int = -1
 var stun_phase: int = -1      # phase id in which the current stun was applied
@@ -76,7 +82,10 @@ func short_status() -> String:
 	elif state == State.DOWN:
 		parts.append("DOWN %d" % tokens)
 	if not loading.is_empty():
-		parts.append("LOAD %d/%d" % [loading.counters, loading.need])
+		if loading.get("ready", false):
+			parts.append("READY")
+		else:
+			parts.append("LOAD %d/%d" % [loading.counters, loading.need])
 	if cooldown > 0:
 		parts.append("CD %d" % cooldown)
 	if immobile > 0:

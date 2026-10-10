@@ -1,10 +1,10 @@
 extends Node
-## Persistent roster: heroes (level, XP, skill points, skills) and the Dungeon
-## Master's own progression. Saved as JSON in user://.
+## Persistent roster: heroes (level, XP, card collection, deck) and the
+## Dungeon Master's own progression. Saved as JSON in user://.
 
 ## Tests point this at a scratch file so they never touch the real roster.
 var save_path := "user://sdf_save.json"
-const START_SKILL_POINTS := 5
+const DECK_SIZE := 30
 const DM_XP_PER_LEVEL := 20
 const MAX_HERO_LEVEL := 20
 
@@ -30,12 +30,19 @@ func load_game() -> void:
 					data[k] = parsed[k]
 	# JSON turns ints into floats; normalise the fields we do arithmetic on.
 	for h in data.heroes:
-		for k in ["id", "level", "xp", "sp", "runs", "kills"]:
+		for k in ["id", "level", "xp", "runs", "kills"]:
 			h[k] = int(h.get(k, 0))
-		var fixed := {}
-		for s in h.get("skills", {}):
-			fixed[s] = int(h.skills[s])
-		h.skills = fixed
+		# Migrate pre-deck saves (skill points + ranks) to a starter deck.
+		if not h.has("deck"):
+			h.deck = HeroDB.get_def(h.cls).starter_deck.duplicate()
+			h.collection = h.deck.duplicate()
+		h.erase("skills")
+		h.erase("sp")
+		for field in ["deck", "collection"]:
+			var fixed := {}
+			for key in h.get(field, {}):
+				fixed[key] = int(h[field][key])
+			h[field] = fixed
 	for k in data.dm:
 		data.dm[k] = int(data.dm[k])
 	data.runs = int(data.runs)
@@ -69,13 +76,11 @@ func hero_by_id(id: int) -> Dictionary:
 
 func new_hero(hero_name: String, cls: String) -> Dictionary:
 	var def := HeroDB.get_def(cls)
-	var skills := {}
-	for s in def.skills:
-		skills[s] = -1
 	var h := {
 		"id": data.next_hero_id, "name": hero_name, "cls": cls,
-		"level": 1, "xp": 0, "sp": START_SKILL_POINTS, "skills": skills,
-		"runs": 0, "kills": 0,
+		"level": 1, "xp": 0, "runs": 0, "kills": 0,
+		"deck": def.starter_deck.duplicate(),
+		"collection": def.starter_deck.duplicate(),
 	}
 	data.next_hero_id += 1
 	data.heroes.append(h)
@@ -95,28 +100,84 @@ func xp_to_next(level: int) -> int:
 	return 4 + 2 * level
 
 
-## Returns the cost to buy the next rank of `skill` for `hero`, or -1 if maxed.
-func next_rank_cost(h: Dictionary, skill: String) -> int:
-	var cur: int = h.skills.get(skill, -1)
-	if not SkillDB.has_ranks(skill):
-		return -1
-	if cur >= SkillDB.max_rank(skill):
-		return -1
-	return SkillDB.rank_cost(skill, cur + 1)
+# ------------------------------------------------------------------ cards
+
+func deck_size(h: Dictionary) -> int:
+	var n := 0
+	for key in h.deck:
+		n += h.deck[key]
+	return n
 
 
-func can_learn(h: Dictionary, skill: String) -> bool:
-	var cost := next_rank_cost(h, skill)
-	return cost >= 0 and h.sp >= cost
+func collection_size(h: Dictionary) -> int:
+	var n := 0
+	for key in h.collection:
+		n += h.collection[key]
+	return n
 
 
-func learn(h: Dictionary, skill: String) -> bool:
-	if not can_learn(h, skill):
+## The deck expanded into individual cards, ready for GameEngine.setup_deck.
+func deck_cards(h: Dictionary) -> Array:
+	var out: Array = []
+	for key in h.deck:
+		var c := SkillDB.parse_key(key)
+		for i in h.deck[key]:
+			out.append({"skill": c.skill, "rank": c.rank})
+	return out
+
+
+func add_to_deck(h: Dictionary, key: String) -> bool:
+	if h.deck.get(key, 0) >= h.collection.get(key, 0) or deck_size(h) >= DECK_SIZE:
 		return false
-	h.sp -= next_rank_cost(h, skill)
-	h.skills[skill] = h.skills.get(skill, -1) + 1
+	h.deck[key] = h.deck.get(key, 0) + 1
 	save_game()
 	return true
+
+
+func remove_from_deck(h: Dictionary, key: String) -> bool:
+	if h.deck.get(key, 0) <= 0:
+		return false
+	h.deck[key] -= 1
+	if h.deck[key] == 0:
+		h.deck.erase(key)
+	save_game()
+	return true
+
+
+## Rarity odds shift toward rare cards as the dungeon level rises.
+func rarity_weights(dungeon_level: int) -> Array[float]:
+	var L := float(dungeon_level)
+	return [maxf(5.0, 55.0 - 5.0 * L), 30.0, 10.0 + 2.0 * L, maxf(0.0, 2.0 * L - 4.0)]
+
+
+func roll_rarity(dungeon_level: int, rng: RandomNumberGenerator) -> int:
+	var w := rarity_weights(dungeon_level)
+	var total := 0.0
+	for x in w:
+		total += x
+	var roll := rng.randf() * total
+	for i in w.size():
+		roll -= w[i]
+		if roll <= 0.0:
+			return i
+	return 0
+
+
+## A random card the hero's class can use, of the rolled rarity (or the next
+## rarity down if the class has none at that tier). Returns the card key.
+func random_card(h: Dictionary, dungeon_level: int, rng: RandomNumberGenerator) -> String:
+	var r := roll_rarity(dungeon_level, rng)
+	while r >= 0:
+		var pool := HeroDB.cards_for_class(h.cls, r)
+		if not pool.is_empty():
+			var c: Dictionary = pool[rng.randi_range(0, pool.size() - 1)]
+			return SkillDB.card_key(c.skill, c.rank)
+		r -= 1
+	return "attack:-1"
+
+
+func grant_card(h: Dictionary, key: String) -> void:
+	h.collection[key] = h.collection.get(key, 0) + 1
 
 
 ## Level-1 base stats scaled by level.
@@ -149,7 +210,6 @@ func make_unit(h: Dictionary) -> Unit:
 	u.move = st.move
 	u.weapon = def.weapon
 	u.has_shield = def.shield
-	u.skills = h.skills.duplicate()
 	return u
 
 
@@ -159,8 +219,8 @@ func dm_level() -> int:
 	return 1 + int(data.dm.xp / DM_XP_PER_LEVEL)
 
 
-## Applies XP from a finished run. Returns a list of human-readable lines.
-func apply_run(engine: GameEngine, heroes_won: bool) -> Array[String]:
+## Applies XP and card rewards from a finished run. Returns readable lines.
+func apply_run(engine: GameEngine, heroes_won: bool, dungeon_level: int) -> Array[String]:
 	var lines: Array[String] = []
 	data.runs += 1
 	if heroes_won:
@@ -179,13 +239,17 @@ func apply_run(engine: GameEngine, heroes_won: bool) -> Array[String]:
 		while h.level < MAX_HERO_LEVEL and h.xp >= xp_to_next(h.level):
 			h.xp -= xp_to_next(h.level)
 			h.level += 1
-			h.sp += 1
 			levels += 1
 		var line := "%s: +%d XP" % [h.name, gained]
 		if levels > 0:
-			line += "  LEVEL UP -> %d (+%d skill point%s)" % [h.level, levels, "s" if levels > 1 else ""]
+			line += "  LEVEL UP -> %d" % h.level
 		if not u.alive:
 			line += "  (knocked out, recovers in town)"
+		if heroes_won:
+			var key := random_card(h, dungeon_level, engine.rng)
+			grant_card(h, key)
+			var c := SkillDB.parse_key(key)
+			line += "\n   New card: %s (%s)" % [SkillDB.display_name(c.skill, c.rank), SkillDB.rarity_name(c.skill, c.rank)]
 		lines.append(line)
 	var dm_before := dm_level()
 	var dm_gain: int = int(engine.damage_to_heroes / 5) + 5 * engine.hero_kos + (10 if not heroes_won else 0)

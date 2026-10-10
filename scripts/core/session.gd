@@ -16,3 +16,8 @@ func dm_budget() -> int:
 			total += h.level
 	var bonus: int = int((Save.dm_level() - 1) / 2)
 	return maxi(2, int(ceil(total * difficulty)) + bonus)
+
+
+## Dungeon level drives card rarity: it is simply the summoning budget.
+func dungeon_level() -> int:
+	return dm_budget()

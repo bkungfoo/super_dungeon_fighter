@@ -79,14 +79,21 @@ func _update() -> void:
 	Session.party_ids = ids
 	Session.difficulty = DIFFICULTIES[_diff_index][1]
 	Session.difficulty_name = DIFFICULTIES[_diff_index][0]
-	var ok := ids.size() >= 1 and ids.size() <= MAX_PARTY
+	var bad_decks: Array[String] = []
+	for id in ids:
+		var h: Dictionary = Save.hero_by_id(id)
+		if Save.deck_size(h) != Save.DECK_SIZE:
+			bad_decks.append(h.name)
+	var ok := ids.size() >= 1 and ids.size() <= MAX_PARTY and bad_decks.is_empty()
 	_start.disabled = not ok
 	if ids.is_empty():
 		_info.text = "Select at least one hero."
 	elif ids.size() > MAX_PARTY:
 		_info.text = "Too many heroes."
+	elif not bad_decks.is_empty():
+		_info.text = "%s need%s exactly %d cards in the deck. Fix it in town." % [", ".join(bad_decks), "s" if bad_decks.size() == 1 else "", Save.DECK_SIZE]
 	else:
-		_info.text = "The Dark Lord (level %d) gets %d summoning points." % [Save.dm_level(), Session.dm_budget()]
+		_info.text = "Dungeon level %d: the Dark Lord (level %d) gets %d summoning points. Win to earn a card each." % [Session.dungeon_level(), Save.dm_level(), Session.dm_budget()]
 
 
 func _start_run() -> void:

@@ -3,16 +3,24 @@ extends RefCounted
 ## Pure rules engine for one dungeon run. No scene dependencies, so it can be
 ## driven by the UI, by AI-vs-AI simulations, and by the headless test runner.
 ##
-## Round structure (from the design document):
-##   1. Charged skill phase  – loaded skills gain a counter; ready ones fire.
-##   2. Movement phase       – all units reveal movement simultaneously.
-##   3. Skill phase          – all units reveal skills simultaneously.
-##   4. End of round         – tokens, cooldowns and stamina tick.
+## A round:
+##   1. Start: loaded skills gain a counter; ready ones will fire this round.
+##   2. Everyone secretly plans one action: a move and/or a card.
+##        - instant card (no load time): move and play it in the same turn,
+##          aimed from the destination.
+##        - charge-up card: played standing still; while loading the unit may
+##          move unless the card says "immobile". Once charged, the unit moves
+##          and the skill fires in the same turn, aimed from the destination.
+##   3. Movement resolves simultaneously, then skills resolve in priority
+##      order (ties random, Reset units first). A unit stunned or knocked down
+##      before its skill fires loses it.
+##   4. End of round: tokens, cooldowns and stamina tick; hands refill to 5.
 
 signal log_msg(text: String)
 signal event(kind: String, data: Dictionary)
 
 const DIRS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+const HAND_SIZE := 5
 
 var grid: BoardGrid
 var units: Array = []           # Array[Unit]
@@ -22,19 +30,9 @@ var phase_id: int = 0
 var damage_to_heroes: int = 0
 var hero_kos: int = 0
 var _next_id: int = 1
-# Timers set during the skill phase get +1 because the end-of-round tick
-# happens right after; timers set in the charged phase (before the unit's
-# turn) do not.
-var _tick_bonus: int = 0
 var history: Array[String] = []
 ## Team whose face-down (loading) cards stay hidden in the log; -1 shows all.
 var hidden_team: int = -1
-
-
-func _loading_name(u: Unit, sid: String) -> String:
-	if u.team == hidden_team:
-		return "a face-down skill"
-	return SkillDB.get_def(sid).name
 
 
 func _init(cols: int = 8, rows: int = 8, seed_value: int = -1) -> void:
@@ -93,16 +91,26 @@ func has_initiative(u: Unit) -> bool:
 	return u.initiative_until == round_no
 
 
+func is_ready(u: Unit) -> bool:
+	return not u.loading.is_empty() and u.loading.get("ready", false)
+
+
 func can_move(u: Unit) -> bool:
 	if not u.alive or u.state != Unit.State.ACTIVE or u.immobile > 0 or u.move <= 0:
 		return false
-	if not u.loading.is_empty() and u.loading.get("immobile", false):
+	if not u.loading.is_empty() and u.loading.get("immobile", false) and not is_ready(u):
 		return false
 	return true
 
 
-func can_act(u: Unit) -> bool:
+func can_play(u: Unit) -> bool:
 	return u.alive and u.state == Unit.State.ACTIVE and u.loading.is_empty()
+
+
+func _loading_name(u: Unit, sid: String) -> String:
+	if u.team == hidden_team:
+		return "a face-down card"
+	return SkillDB.get_def(sid).name
 
 
 func _log(text: String) -> void:
@@ -124,7 +132,7 @@ func _shuffled(arr: Array) -> Array:
 	return a
 
 
-## Random activation priority ("roll a die"); units with initiative go first.
+## Random priority ("roll a die"); units with initiative go first.
 func _priority_order(arr: Array) -> Array:
 	var first: Array = []
 	var rest: Array = []
@@ -136,37 +144,93 @@ func _priority_order(arr: Array) -> Array:
 	return _shuffled(first) + _shuffled(rest)
 
 
+# ------------------------------------------------------------------ decks
+
+## Gives a hero its shuffled deck and opening hand.
+func setup_deck(u: Unit, cards: Array) -> void:
+	u.uses_deck = true
+	u.deck = _shuffled(cards)
+	u.hand = []
+	u.discard = []
+	_draw(u)
+
+
+func _draw(u: Unit) -> void:
+	while u.hand.size() < HAND_SIZE:
+		if u.deck.is_empty():
+			if u.discard.is_empty():
+				return
+			u.deck = _shuffled(u.discard)
+			u.discard = []
+			_log("%s reshuffles their discard pile." % u.name)
+		u.hand.append(u.deck.pop_back())
+
+
+## Cards the unit could play right now (hand for heroes, skill list for monsters).
+func hand(u: Unit) -> Array:
+	if u.uses_deck:
+		return u.hand
+	var out: Array = []
+	for sid in u.skills:
+		out.append({"skill": sid, "rank": u.skills[sid]})
+	return out
+
+
+func is_chain_available(u: Unit, sid: String) -> bool:
+	return u.cooldown > 0 and sid in u.chain_allowed and round_no <= u.chain_expires
+
+
+func card_playable(u: Unit, card: Dictionary) -> bool:
+	if not can_play(u):
+		return false
+	var def := SkillDB.get_def(card.skill)
+	if def.is_empty() or not u.weapon_ok(def.weapon):
+		return false
+	var p := SkillDB.params(card.skill, card.rank)
+	if u.cooldown > 0 and not is_chain_available(u, card.skill):
+		return false
+	if u.stam < p.cost:
+		return false
+	if p.get("life_cost", 0) >= u.life:
+		return false
+	return true
+
+
+func playable_cards(u: Unit) -> Array:
+	var out: Array = []
+	for c in hand(u):
+		if card_playable(u, c):
+			out.append(c)
+	return out
+
+
+func _take_card(u: Unit, sid: String, rank: int) -> bool:
+	if not u.uses_deck:
+		return u.skills.has(sid)
+	for i in u.hand.size():
+		if u.hand[i].skill == sid and u.hand[i].rank == rank:
+			u.discard.append(u.hand[i])
+			u.hand.remove_at(i)
+			return true
+	return false
+
+
 # ------------------------------------------------------------------ rounds
 
 func start_round() -> void:
 	round_no += 1
 	phase_id += 1
-	_tick_bonus = 0
 	_log("--- Round %d ---" % round_no)
-	_charged_phase()
-
-
-func _charged_phase() -> void:
-	var ready: Array = []
 	for u in living():
 		if u.loading.is_empty():
 			continue
 		u.loading.counters += 1
 		if u.loading.counters >= u.loading.need:
-			ready.append(u)
+			u.loading.ready = true
+			_log("%s's %s is charged and ready!" % [u.name, _loading_name(u, u.loading.skill)])
+			_emit("text", {"pos": u.pos, "text": "READY", "color": Color(0.8, 1, 0.8)})
 		else:
 			_log("%s keeps charging %s (%d/%d)." % [u.name, _loading_name(u, u.loading.skill), u.loading.counters, u.loading.need])
-	for u in _priority_order(ready):
-		if not u.alive or u.state != Unit.State.ACTIVE or u.loading.is_empty():
-			if u.alive:
-				_log("%s's charged skill was interrupted!" % u.name)
-				u.loading = {}
-			continue
-		var L: Dictionary = u.loading
-		u.loading = {}
-		_log("%s unleashes %s!" % [u.name, SkillDB.display_name(L.skill, L.rank)])
-		_emit("skill", {"unit": u, "name": SkillDB.get_def(L.skill).name})
-		_execute(u, L.skill, L.rank, L.dir, L.cell)
 
 
 # ------------------------------------------------------------------ movement
@@ -230,10 +294,7 @@ func _path_ignoring_units(from: Vector2i, to: Vector2i, limit: int) -> Array:
 	return path
 
 
-## orders: unit_id -> destination cell. Units reveal and move simultaneously;
-## conflicts are settled by random priority (initiative first).
-func resolve_movement(orders: Dictionary) -> void:
-	phase_id += 1
+func _resolve_movement(orders: Dictionary) -> void:
 	var movers: Array = []
 	for id in orders:
 		var u := unit_by_id(id)
@@ -263,55 +324,33 @@ func resolve_movement(orders: Dictionary) -> void:
 			_log("%s is blocked and stays put." % u.name)
 
 
-# ------------------------------------------------------------------ skills
+# ------------------------------------------------------------------ targeting
 
-func available_skills(u: Unit) -> Array:
-	var out: Array = []
-	if not can_act(u):
-		return out
-	for sid in u.skills:
-		var def := SkillDB.get_def(sid)
-		if def.is_empty() or not u.weapon_ok(def.weapon):
-			continue
-		var p := SkillDB.params(sid, u.skills[sid])
-		var chained: bool = sid in u.chain_allowed and round_no <= u.chain_expires
-		if u.cooldown > 0 and not chained:
-			continue
-		if u.stam < p.cost:
-			continue
-		if p.get("life_cost", 0) >= u.life:
-			continue
-		out.append(sid)
-	return out
-
-
-func is_chain_available(u: Unit, sid: String) -> bool:
-	return u.cooldown > 0 and sid in u.chain_allowed and round_no <= u.chain_expires
-
-
-## Cells the player may tap to target a skill. For "dir" skills these are the
-## four neighbours (plus the whole lane for charging skills).
-func skill_targets(u: Unit, sid: String) -> Array[Vector2i]:
+## Cells a skill can be aimed at from `from` (the planned destination).
+## "dir" skills list the four neighbours (whole lane for charging skills).
+func skill_targets(u: Unit, sid: String, rank: int, from: Vector2i) -> Array[Vector2i]:
 	var def := SkillDB.get_def(sid)
-	var p := SkillDB.params(sid, u.skills[sid])
+	var p := SkillDB.params(sid, rank)
 	var out: Array[Vector2i] = []
 	match def.target:
 		"dir":
 			for d in DIRS:
 				var reach: int = p.get("charge", 1)
 				for i in range(1, reach + 1):
-					var c: Vector2i = u.pos + d * i
+					var c: Vector2i = from + d * i
 					if not grid.passable(c):
 						break
 					out.append(c)
 		"cell":
 			for c in grid.all_cells():
-				if grid.passable(c) and BoardGrid.manhattan(c, u.pos) <= p.range:
+				if grid.passable(c) and BoardGrid.manhattan(c, from) <= p.range:
 					out.append(c)
 		"blink":
 			for c in grid.all_cells():
-				if is_free(c) and c != u.pos and BoardGrid.manhattan(c, u.pos) <= p.range:
-					out.append(c)
+				if grid.passable(c) and c != from and BoardGrid.manhattan(c, from) <= p.range:
+					var o := unit_at(c)
+					if o == null or o == u:
+						out.append(c)
 	return out
 
 
@@ -322,36 +361,76 @@ static func dir_to(from: Vector2i, to: Vector2i) -> Vector2i:
 	return Vector2i(0, signi(d.y))
 
 
-## orders: unit_id -> {"skill": id, "cell": Vector2i (target or any cell in a direction)}
-func resolve_skills(orders: Dictionary) -> void:
+# ------------------------------------------------------------------ the round
+
+## orders: unit_id -> {
+##   "move": Vector2i            optional destination
+##   "skill": String, "rank": int  optional card to play (ignored for a unit whose charged skill is ready)
+##   "aim_dir": Vector2i         direction for "dir" skills, relative to the final position
+##   "aim_cell": Vector2i        target for "cell"/"blink" skills
+## }
+func resolve_round(orders: Dictionary) -> void:
 	phase_id += 1
-	_tick_bonus = 1
+	# Charge-up cards are played standing still.
+	var moves := {}
+	for id in orders:
+		var o: Dictionary = orders[id]
+		if not o.has("move"):
+			continue
+		var u := unit_by_id(id)
+		if u == null:
+			continue
+		if o.has("skill") and not is_ready(u) and SkillDB.params(o.skill, o.get("rank", -1)).get("load", 0) > 0:
+			continue
+		moves[id] = o.move
+	_resolve_movement(moves)
+
 	var plays: Array = []
 	for id in orders:
 		var u := unit_by_id(id)
-		if u == null or not can_act(u):
+		if u == null or not u.alive or u.state != Unit.State.ACTIVE:
 			continue
-		var sid: String = orders[id].get("skill", "")
-		if sid == "" or not (sid in available_skills(u)):
+		var o: Dictionary = orders[id]
+		if is_ready(u):
+			var L: Dictionary = u.loading
+			u.loading = {}
+			var dir: Vector2i = o.get("aim_dir", L.dir)
+			if dir == Vector2i.ZERO:
+				dir = L.dir
+			var cell: Vector2i = o.get("aim_cell", L.cell)
+			var p := SkillDB.params(L.skill, L.rank)
+			_log("%s unleashes %s!" % [u.name, SkillDB.display_name(L.skill, L.rank)])
+			_emit("skill", {"unit": u, "name": SkillDB.get_def(L.skill).name})
+			plays.append(_make_play(u, L.skill, L.rank, p, dir, cell))
+			continue
+		var sid: String = o.get("skill", "")
+		if sid == "":
+			continue
+		var rank: int = o.get("rank", -1)
+		var card := {"skill": sid, "rank": rank}
+		if not card_playable(u, card) or not _take_card(u, sid, rank):
 			continue
 		var def := SkillDB.get_def(sid)
-		var rank: int = u.skills[sid]
 		var p := SkillDB.params(sid, rank)
-		var cell: Vector2i = orders[id].get("cell", u.pos)
-		var dir := Vector2i.ZERO
-		if def.target == "dir":
-			dir = dir_to(u.pos, cell)
-			if dir == Vector2i.ZERO:
-				dir = Vector2i(0, 1)
 		u.stam -= p.cost
 		u.life -= p.get("life_cost", 0)
 		u.chain_allowed = []
-		if u.team == hidden_team and p.get("load", 0) > 0:
-			_log("%s plays a card face down." % u.name)
-		else:
-			_log("%s plays %s." % [u.name, SkillDB.display_name(sid, rank)])
-			_emit("skill", {"unit": u, "name": def.name})
-		plays.append({"u": u, "sid": sid, "rank": rank, "p": p, "dir": dir, "cell": cell, "cancelled": false})
+		var dir: Vector2i = o.get("aim_dir", Vector2i(0, 1))
+		if dir == Vector2i.ZERO:
+			dir = Vector2i(0, 1)
+		var cell: Vector2i = o.get("aim_cell", u.pos)
+		if p.get("load", 0) > 0:
+			u.loading = {"skill": sid, "rank": rank, "dir": dir, "cell": cell, "counters": 0,
+				"need": p.load, "immobile": p.get("load_immobile", false), "ready": false}
+			if u.team == hidden_team:
+				_log("%s plays a card face down." % u.name)
+			else:
+				_log("%s plays %s face down (charges in %d)." % [u.name, SkillDB.display_name(sid, rank), p.load])
+			_emit("text", {"pos": u.pos, "text": "CHARGING", "color": Color(0.8, 0.8, 1)})
+			continue
+		_log("%s plays %s." % [u.name, SkillDB.display_name(sid, rank)])
+		_emit("skill", {"unit": u, "name": def.name})
+		plays.append(_make_play(u, sid, rank, p, dir, cell))
 
 	# Defend is declared before anything resolves.
 	for pl in plays:
@@ -371,30 +450,38 @@ func resolve_skills(orders: Dictionary) -> void:
 				_log("%s's Grab is broken by %s's Attack!" % [pl.u.name, victim.name])
 				_emit("text", {"pos": pl.u.pos, "text": "BROKEN", "color": Color(1, 0.6, 0.2)})
 
-	var instant: Array = []
-	var instant_units: Array = []
+	# Priority: higher skill priority first; Reset initiative, then a die roll, break ties.
+	for pl in plays:
+		pl.roll = rng.randf()
+	plays.sort_custom(func(a, b):
+		if a.p.get("priority", 0) != b.p.get("priority", 0):
+			return a.p.get("priority", 0) > b.p.get("priority", 0)
+		if has_initiative(a.u) != has_initiative(b.u):
+			return has_initiative(a.u)
+		return a.roll > b.roll)
 	for pl in plays:
 		if pl.cancelled:
 			continue
-		if pl.p.get("load", 0) > 0:
-			pl.u.loading = {"skill": pl.sid, "rank": pl.rank, "dir": pl.dir, "cell": pl.cell,
-				"counters": 0, "need": pl.p.load, "immobile": pl.p.get("load_immobile", false)}
-			_log("%s starts charging %s (ready in %d)." % [pl.u.name, _loading_name(pl.u, pl.sid), pl.p.load])
-			_emit("text", {"pos": pl.u.pos, "text": "CHARGING", "color": Color(0.8, 0.8, 1)})
-		else:
-			instant.append(pl)
-			instant_units.append(pl.u)
-
-	var order := _priority_order(instant_units)
-	for u in order:
-		for pl in instant:
-			if pl.u != u:
-				continue
-			if not u.alive or u.state != Unit.State.ACTIVE:
+		var u: Unit = pl.u
+		if not u.alive or u.state != Unit.State.ACTIVE:
+			if u.alive:
 				_log("%s's %s is interrupted!" % [u.name, SkillDB.get_def(pl.sid).name])
-				continue
-			_execute(u, pl.sid, pl.rank, pl.dir, pl.cell)
-	_tick_bonus = 0
+			continue
+		_execute(u, pl.sid, pl.rank, pl.dir, pl.cell)
+	_end_round()
+
+
+func _make_play(u: Unit, sid: String, rank: int, p: Dictionary, dir: Vector2i, cell: Vector2i) -> Dictionary:
+	var def := SkillDB.get_def(sid)
+	if def.target == "dir":
+		cell = u.pos + dir
+	elif def.target == "cell" or def.target == "blink":
+		# A truncated move can leave the aim out of range: pull it back toward the unit.
+		var guard := 0
+		while BoardGrid.manhattan(cell, u.pos) > p.get("range", 99) and guard < 32:
+			cell -= dir_to(u.pos, cell)
+			guard += 1
+	return {"u": u, "sid": sid, "rank": rank, "p": p, "dir": dir, "cell": cell, "cancelled": false, "roll": 0.0}
 
 
 func _execute(u: Unit, sid: String, rank: int, dir: Vector2i, cell: Vector2i) -> void:
@@ -444,15 +531,16 @@ func _execute(u: Unit, sid: String, rank: int, dir: Vector2i, cell: Vector2i) ->
 		_log("%s raises their guard." % u.name)
 		_emit("text", {"pos": u.pos, "text": "GUARD", "color": Color(0.6, 0.9, 1)})
 
+	# Timers tick at the end of this round, so add one to cover it.
 	if p.get("cooldown", 0) > 0:
-		u.cooldown = maxi(u.cooldown, p.cooldown + _tick_bonus)
+		u.cooldown = maxi(u.cooldown, p.cooldown + 1)
 	if p.get("immobile", 0) > 0:
-		u.immobile = maxi(u.immobile, p.immobile + _tick_bonus)
+		u.immobile = maxi(u.immobile, p.immobile + 1)
 	if p.get("invuln", 0) > 0:
-		u.invuln = maxi(u.invuln, p.invuln + _tick_bonus)
+		u.invuln = maxi(u.invuln, p.invuln + 1)
 	if not def.chains.is_empty():
 		u.chain_allowed = def.chains.duplicate()
-		u.chain_expires = round_no + _tick_bonus
+		u.chain_expires = round_no + 1
 
 
 func _execute_charge(u: Unit, sid: String, p: Dictionary, dir: Vector2i, base_dmg: int) -> void:
@@ -522,8 +610,6 @@ func _apply_hit(att: Unit, v: Unit, sid: String, p: Dictionary, dmg: int, kdir: 
 			status_ok = false
 			_log("%s's guard is broken by %s: half damage." % [v.name, SkillDB.get_def(sid).name])
 		else:
-			dmg = 0
-			status_ok = false
 			_log("%s blocks %s's %s!" % [v.name, att.name, SkillDB.get_def(sid).name])
 			_emit("text", {"pos": v.pos, "text": "BLOCK", "color": Color(0.6, 0.9, 1)})
 			if sid == "attack":
@@ -549,6 +635,7 @@ func _apply_hit(att: Unit, v: Unit, sid: String, p: Dictionary, dmg: int, kdir: 
 
 
 ## Combo state machine: Active -> Stunned -> Down -> Reset -> Active.
+## Token counts include +1 because the end-of-round tick follows immediately.
 func _apply_status(v: Unit, kind: String, x: int) -> void:
 	if v.resist > 0:
 		_log("%s shrugs it off (Reset)." % v.name)
@@ -561,27 +648,27 @@ func _apply_status(v: Unit, kind: String, x: int) -> void:
 		Unit.State.ACTIVE:
 			if kind == "stun":
 				v.state = Unit.State.STUNNED
-				v.tokens = x + _tick_bonus
+				v.tokens = x + 1
 				v.stun_phase = phase_id
 				_log("%s is stunned (%d)." % [v.name, x])
 				_emit("text", {"pos": v.pos, "text": "STUN %d" % x, "color": Color(1, 0.9, 0.3)})
 			else:
 				v.state = Unit.State.DOWN
-				v.tokens = x + _tick_bonus
+				v.tokens = x + 1
 				_log("%s is knocked down (%d)." % [v.name, x])
 				_emit("text", {"pos": v.pos, "text": "DOWN %d" % x, "color": Color(1, 0.5, 0.3)})
 		Unit.State.STUNNED:
 			var y := x
 			if v.stun_phase == phase_id:
-				y = maxi(v.tokens - _tick_bonus, x)
+				y = maxi(v.tokens - 1, x)
 			v.state = Unit.State.DOWN
-			v.tokens = y + _tick_bonus
+			v.tokens = y + 1
 			_log("%s is knocked down (%d)!" % [v.name, y])
 			_emit("text", {"pos": v.pos, "text": "DOWN %d" % y, "color": Color(1, 0.5, 0.3)})
 		Unit.State.DOWN:
 			v.state = Unit.State.ACTIVE
 			v.tokens = 0
-			v.resist = x + 1 + _tick_bonus
+			v.resist = x + 2
 			v.initiative_until = round_no + 1
 			v.cooldown = 0
 			v.immobile = 0
@@ -631,7 +718,7 @@ func _kill(v: Unit, att: Unit) -> void:
 
 # ------------------------------------------------------------------ end of round
 
-func end_round() -> void:
+func _end_round() -> void:
 	for u in living():
 		if u.state != Unit.State.ACTIVE:
 			u.tokens -= 1
@@ -647,3 +734,5 @@ func end_round() -> void:
 		u.stam = mini(u.max_stam, u.stam + u.stam_regen)
 		if round_no > u.chain_expires:
 			u.chain_allowed = []
+		if u.uses_deck:
+			_draw(u)

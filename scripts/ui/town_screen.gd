@@ -1,5 +1,5 @@
 extends Control
-## Roster management: recruit heroes, spend skill points, head to the dungeon.
+## Roster management: recruit heroes, build decks, head to the dungeon.
 
 var _roster: VBoxContainer
 var _rng := RandomNumberGenerator.new()
@@ -61,22 +61,22 @@ func _hero_card(h: Dictionary) -> Control:
 	p.add_child(v)
 	var def := HeroDB.get_def(h.cls)
 	var st: Dictionary = Save.hero_stats(h)
-	var head := UI.hbox()
 	var name_l := UI.label("%s  -  %s Lv %d" % [h.name, def.name, h.level], "HeadingLabel")
 	name_l.add_theme_color_override("font_color", def.color)
-	head.add_child(name_l)
-	v.add_child(head)
+	v.add_child(name_l)
 	v.add_child(UI.label("Life %d   Stam %d (+%d)   Atk %d   Move %d" % [st.life, st.stam, st.regen, st.attack, st.move], "SmallLabel"))
-	v.add_child(UI.label("XP %d / %d   Skill points: %d   Kills: %d   Runs: %d" % [h.xp, Save.xp_to_next(h.level), h.sp, h.kills, h.runs], "DimLabel"))
-	var skill_names: Array[String] = []
-	for s in h.skills:
-		skill_names.append(SkillDB.display_name(s, h.skills[s]))
-	v.add_child(UI.label("Skills: " + ", ".join(skill_names), "SmallLabel"))
+	v.add_child(UI.label("XP %d / %d   Kills: %d   Runs: %d" % [h.xp, Save.xp_to_next(h.level), h.kills, h.runs], "DimLabel"))
+	var deck_n: int = Save.deck_size(h)
+	var spare: int = Save.collection_size(h) - deck_n
+	var deck_line := UI.label("Deck %d / %d cards   |   %d spare card%s in the collection" % [deck_n, Save.DECK_SIZE, spare, "" if spare == 1 else "s"], "SmallLabel")
+	if deck_n != Save.DECK_SIZE:
+		deck_line.add_theme_color_override("font_color", UI.DANGER)
+	v.add_child(deck_line)
 	var row := UI.hbox()
-	var skills_btn := UI.button("Skills (%d SP)" % h.sp, func(): _skill_shop(h))
-	if h.sp > 0:
-		skills_btn.theme_type_variation = "OkButton"
-	row.add_child(skills_btn)
+	var deck_btn := UI.button("Deck", func(): _deck_editor(h))
+	if spare > 0 or deck_n != Save.DECK_SIZE:
+		deck_btn.theme_type_variation = "OkButton"
+	row.add_child(deck_btn)
 	var dismiss := UI.button("Dismiss", func(): _confirm_dismiss(h), "DangerButton")
 	dismiss.size_flags_horizontal = 0
 	row.add_child(dismiss)
@@ -118,10 +118,12 @@ func _recruit_dialog() -> void:
 	md.vbox.add_child(UI.button("Cancel", func(): md.overlay.queue_free()))
 
 
-func _skill_shop(h: Dictionary) -> void:
-	var md := UI.modal(self, "%s's Skills" % h.name)
-	var sp_label := UI.label("Skill points: %d" % h.sp, "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
-	md.vbox.add_child(sp_label)
+## Deck builder: every card the hero owns, with +/- to move copies in and out
+## of the 30-card deck.
+func _deck_editor(h: Dictionary) -> void:
+	var md := UI.modal(self, "%s's Deck" % h.name)
+	var count_label := UI.label("", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	md.vbox.add_child(count_label)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(0, 1100)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -134,35 +136,54 @@ func _skill_shop(h: Dictionary) -> void:
 	var rebuild := func() -> void: pass
 	rebuild = func() -> void:
 		UI.clear_children(list)
-		sp_label.text = "Skill points: %d" % h.sp
-		var def := HeroDB.get_def(h.cls)
-		var all: Array = []
-		for s in def.skills:
-			all.append(s)
-		for s in def.learnable:
-			all.append(s)
-		for s in all:
-			var cur: int = h.skills.get(s, -1)
+		var n: int = Save.deck_size(h)
+		count_label.text = "Deck: %d / %d cards" % [n, Save.DECK_SIZE]
+		count_label.add_theme_color_override("font_color", UI.OK if n == Save.DECK_SIZE else UI.DANGER)
+		var keys: Array = h.collection.keys()
+		keys.sort_custom(func(a, b):
+			var ca := SkillDB.parse_key(a)
+			var cb := SkillDB.parse_key(b)
+			var ra := SkillDB.rarity(ca.skill, ca.rank)
+			var rb := SkillDB.rarity(cb.skill, cb.rank)
+			if ra != rb:
+				return ra < rb
+			if ca.skill != cb.skill:
+				return ca.skill < cb.skill
+			return ca.rank < cb.rank)
+		for key in keys:
+			var c := SkillDB.parse_key(key)
+			var owned: int = h.collection[key]
+			var in_deck: int = h.deck.get(key, 0)
 			var p := UI.panel()
 			var v := UI.vbox(6)
 			p.add_child(v)
-			var known: bool = h.skills.has(s)
-			var title: String = SkillDB.display_name(s, cur) if known else SkillDB.get_def(s).name + "  (not learned)"
-			v.add_child(UI.label(title, "", HORIZONTAL_ALIGNMENT_LEFT))
-			var desc_rank: int = cur if known else 0
-			v.add_child(UI.label(SkillDB.describe(s, desc_rank), "DimLabel"))
-			var cost: int = Save.next_rank_cost(h, s)
-			if cost >= 0:
-				var nxt: int = cur + 1
-				var txt: String = "Learn rank %s (%d SP)" % [SkillDB.rank_label(s, nxt), cost] if not known else "Rank up to %s (%d SP)" % [SkillDB.rank_label(s, nxt), cost]
-				var b := UI.button(txt, func():
-					if Save.learn(h, s):
-						rebuild.call(), "OkButton")
-				b.disabled = not Save.can_learn(h, s)
-				if known:
-					v.add_child(UI.label("Next: " + SkillDB.describe(s, nxt), "SmallLabel"))
-				v.add_child(b)
-			elif SkillDB.has_ranks(s):
-				v.add_child(UI.label("Rank S: mastered", "SmallLabel"))
+			var head := UI.hbox()
+			var title := UI.label(SkillDB.display_name(c.skill, c.rank))
+			title.add_theme_color_override("font_color", SkillDB.RARITY_COLORS[SkillDB.rarity(c.skill, c.rank)])
+			head.add_child(title)
+			var rarity := UI.label(SkillDB.rarity_name(c.skill, c.rank), "DimLabel", HORIZONTAL_ALIGNMENT_RIGHT)
+			rarity.autowrap_mode = TextServer.AUTOWRAP_OFF
+			rarity.size_flags_horizontal = Control.SIZE_SHRINK_END
+			rarity.custom_minimum_size.x = 200
+			head.add_child(rarity)
+			v.add_child(head)
+			v.add_child(UI.label(SkillDB.describe(c.skill, c.rank), "DimLabel"))
+			var row := UI.hbox()
+			var minus := UI.button("-", func():
+				if Save.remove_from_deck(h, key):
+					rebuild.call())
+			minus.size_flags_horizontal = 0
+			minus.custom_minimum_size.x = 130
+			minus.disabled = in_deck <= 0
+			row.add_child(minus)
+			row.add_child(UI.label("In deck: %d   /   Owned: %d" % [in_deck, owned], "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
+			var plus := UI.button("+", func():
+				if Save.add_to_deck(h, key):
+					rebuild.call())
+			plus.size_flags_horizontal = 0
+			plus.custom_minimum_size.x = 130
+			plus.disabled = in_deck >= owned or n >= Save.DECK_SIZE
+			row.add_child(plus)
+			v.add_child(row)
 			list.add_child(p)
 	rebuild.call()

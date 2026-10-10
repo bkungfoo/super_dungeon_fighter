@@ -1,8 +1,8 @@
 extends Control
-## The dungeon run: spawn heroes, then alternate planning and reveal phases
-## against the AI Dungeon Master.
+## The dungeon run: deploy heroes, then each round plan a move and/or a card
+## for every hero and reveal against the AI Dungeon Master.
 
-enum Phase { SPAWN, PLAN_MOVE, PLAN_SKILL, GAME_OVER }
+enum Phase { SPAWN, PLAN, GAME_OVER }
 
 const COLS := 8
 const ROWS := 8
@@ -14,17 +14,17 @@ var engine: GameEngine
 var ai: DMAI
 var board: BoardView
 var phase: int = Phase.SPAWN
-var move_orders: Dictionary = {}
-var skill_orders: Dictionary = {}
+var orders: Dictionary = {}          # hero unit id -> order (see GameEngine.resolve_round)
 var selected: Unit = null
-var pending_skill: String = ""
+var pending_aim: bool = false        # waiting for a tap on an aim cell
 var spawn_queue: Array = []
+var dungeon_level: int = 1
 
 var round_label: Label
 var hint_label: Label
 var info_label: Label
-var skill_bar: HBoxContainer
-var skill_scroll: ScrollContainer
+var hand_bar: HBoxContainer
+var hand_scroll: ScrollContainer
 var confirm_btn: Button
 var clear_btn: Button
 var log_box: RichTextLabel
@@ -67,12 +67,12 @@ func _build_ui() -> void:
 	info_label = UI.label("", "SmallLabel")
 	info_label.custom_minimum_size.y = 80
 	pv.add_child(info_label)
-	skill_scroll = ScrollContainer.new()
-	skill_scroll.custom_minimum_size.y = 120
-	skill_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	skill_bar = UI.hbox(12)
-	skill_scroll.add_child(skill_bar)
-	pv.add_child(skill_scroll)
+	hand_scroll = ScrollContainer.new()
+	hand_scroll.custom_minimum_size.y = 120
+	hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hand_bar = UI.hbox(12)
+	hand_scroll.add_child(hand_bar)
+	pv.add_child(hand_scroll)
 	var row := UI.hbox()
 	clear_btn = UI.button("Clear", _clear_selected_order)
 	clear_btn.size_flags_horizontal = 0
@@ -95,13 +95,16 @@ func _new_run() -> void:
 	engine.log_msg.connect(_on_log)
 	ai = DMAI.new(engine.rng)
 	var budget: int = Session.dm_budget()
+	dungeon_level = Session.dungeon_level()
 	var monsters := ai.choose_monsters(budget, Save.dm_level())
 	ai.build_dungeon(engine, monsters, engine.rng.randi_range(4, 8))
 	for id in Session.party_ids:
 		var h: Dictionary = Save.hero_by_id(id)
 		if h.is_empty():
 			continue
-		spawn_queue.append(engine.add_unit(Save.make_unit(h)))
+		var u := engine.add_unit(Save.make_unit(h))
+		engine.setup_deck(u, Save.deck_cards(h))
+		spawn_queue.append(u)
 	if spawn_queue.is_empty():
 		UI.go("res://scenes/town.tscn")
 		return
@@ -109,7 +112,7 @@ func _new_run() -> void:
 	var names: Array[String] = []
 	for u in engine.living(Unit.TEAM_MONSTERS):
 		names.append(u.name)
-	_on_log("The Dark Lord (level %d, %d points) summons: %s." % [Save.dm_level(), budget, ", ".join(names)])
+	_on_log("Dungeon level %d. The Dark Lord (level %d, %d points) summons: %s." % [dungeon_level, Save.dm_level(), budget, ", ".join(names)])
 	_on_log("Place your heroes on the green cells.")
 	_set_phase(Phase.SPAWN)
 
@@ -119,38 +122,31 @@ func _new_run() -> void:
 func _set_phase(p: int) -> void:
 	phase = p
 	selected = null
-	pending_skill = ""
+	pending_aim = false
 	board.selected_id = -1
 	board.highlights = {}
 	board.plan_labels = {}
 	board.move_arrows = {}
+	board.aim_marks = {}
 	match phase:
 		Phase.SPAWN:
 			_spawn_highlights()
 			confirm_btn.visible = false
 			clear_btn.visible = false
-			skill_scroll.visible = false
+			hand_scroll.visible = false
 			round_label.text = "Deployment"
-		Phase.PLAN_MOVE:
-			move_orders = {}
+		Phase.PLAN:
+			orders = {}
 			confirm_btn.visible = true
-			confirm_btn.text = "Reveal Moves"
+			confirm_btn.text = "Reveal"
 			clear_btn.visible = true
-			skill_scroll.visible = false
-			round_label.text = "Round %d - Move" % engine.round_no
-			_auto_select_next()
-		Phase.PLAN_SKILL:
-			skill_orders = {}
-			confirm_btn.visible = true
-			confirm_btn.text = "Reveal Skills"
-			clear_btn.visible = true
-			skill_scroll.visible = true
-			round_label.text = "Round %d - Skills" % engine.round_no
+			hand_scroll.visible = true
+			round_label.text = "Round %d" % engine.round_no
 			_auto_select_next()
 		Phase.GAME_OVER:
 			confirm_btn.visible = false
 			clear_btn.visible = false
-			skill_scroll.visible = false
+			hand_scroll.visible = false
 	_refresh()
 
 
@@ -163,21 +159,22 @@ func _spawn_highlights() -> void:
 				board.highlights[c] = HL_SPAWN
 
 
+func _needs_order(u: Unit) -> bool:
+	if orders.has(u.id):
+		return false
+	return engine.can_move(u) or engine.can_play(u) or engine.is_ready(u)
+
+
 func _auto_select_next() -> void:
 	for u in engine.living(Unit.TEAM_HEROES):
-		if phase == Phase.PLAN_MOVE and engine.can_move(u) and not move_orders.has(u.id):
-			_select(u)
-			return
-		if phase == Phase.PLAN_SKILL and engine.can_act(u) and not skill_orders.has(u.id):
+		if _needs_order(u):
 			_select(u)
 			return
 
 
 func _begin_round() -> void:
 	engine.start_round()
-	if _check_game_over():
-		return
-	_set_phase(Phase.PLAN_MOVE)
+	_set_phase(Phase.PLAN)
 
 
 func _check_game_over() -> bool:
@@ -190,11 +187,11 @@ func _check_game_over() -> bool:
 
 func _finish(heroes_won: bool) -> void:
 	_set_phase(Phase.GAME_OVER)
-	var lines := Save.apply_run(engine, heroes_won)
+	var lines := Save.apply_run(engine, heroes_won, dungeon_level)
 	Session.last_result_lines = lines
 	Session.last_result_won = heroes_won
 	var md := UI.modal(self, "VICTORY!" if heroes_won else "DEFEAT")
-	md.vbox.add_child(UI.label("The dungeon is cleared. The towns of Halud are safe for now." if heroes_won else "The party has fallen. They will recover in town.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
+	md.vbox.add_child(UI.label("The dungeon is cleared. Each hero draws a new card from the loot." if heroes_won else "The party has fallen. They will recover in town.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
 	for line in lines:
 		md.vbox.add_child(UI.label(line, "SmallLabel"))
 	md.vbox.add_child(UI.button("Return to Town", func(): UI.go("res://scenes/town.tscn"), "PrimaryButton"))
@@ -204,7 +201,7 @@ func _confirm_retreat() -> void:
 	if phase == Phase.GAME_OVER:
 		return
 	var md := UI.modal(self, "Retreat from the dungeon?")
-	md.vbox.add_child(UI.label("Heroes keep XP from kills, but there is no clear bonus and the Dark Lord grows from the damage dealt.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
+	md.vbox.add_child(UI.label("Heroes keep XP from kills, but there is no card reward and the Dark Lord grows from the damage dealt.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER))
 	var row := UI.hbox()
 	row.add_child(UI.button("Keep fighting", func(): md.overlay.queue_free()))
 	row.add_child(UI.button("Retreat", func():
@@ -213,16 +210,81 @@ func _confirm_retreat() -> void:
 	md.vbox.add_child(row)
 
 
-# ------------------------------------------------------------------ input
+# ------------------------------------------------------------------ planning
+
+## Where the selected hero will be when its skill fires.
+func _from_pos(u: Unit) -> Vector2i:
+	var o: Dictionary = orders.get(u.id, {})
+	return o.get("move", u.pos)
+
+
+func _order(u: Unit) -> Dictionary:
+	if not orders.has(u.id):
+		orders[u.id] = {}
+	return orders[u.id]
+
+
+## The skill this hero will fire this round (card picked or charged skill), if any.
+func _firing_skill(u: Unit) -> Dictionary:
+	if engine.is_ready(u):
+		return {"skill": u.loading.skill, "rank": u.loading.rank}
+	var o: Dictionary = orders.get(u.id, {})
+	if o.has("skill"):
+		return {"skill": o.skill, "rank": o.rank}
+	return {}
+
+
+func _needs_aim(u: Unit) -> bool:
+	var f := _firing_skill(u)
+	if f.is_empty():
+		return false
+	var target: String = SkillDB.get_def(f.skill).target
+	if target == "self":
+		return false
+	var o: Dictionary = orders.get(u.id, {})
+	return not (o.has("aim_dir") or o.has("aim_cell"))
+
+
+func _show_move_highlights(u: Unit) -> void:
+	board.highlights = {}
+	if not engine.can_move(u):
+		return
+	var f := _firing_skill(u)
+	if not f.is_empty() and not engine.is_ready(u) and SkillDB.params(f.skill, f.rank).get("load", 0) > 0:
+		return  # charge-up cards are played standing still
+	for c in engine.movement_options(u):
+		board.highlights[c] = HL_MOVE
+
+
+func _show_aim_highlights(u: Unit) -> void:
+	board.highlights = {}
+	var f := _firing_skill(u)
+	if f.is_empty():
+		return
+	for c in engine.skill_targets(u, f.skill, f.rank, _from_pos(u)):
+		board.highlights[c] = HL_TARGET
+	pending_aim = true
+
+
+func _select(u: Unit) -> void:
+	selected = u
+	pending_aim = false
+	board.selected_id = u.id if u != null else -1
+	board.highlights = {}
+	if u != null and u.is_hero() and phase == Phase.PLAN:
+		if _needs_aim(u):
+			_show_aim_highlights(u)
+		else:
+			_show_move_highlights(u)
+	_refresh()
+
 
 func _on_cell_tapped(cell: Vector2i) -> void:
 	match phase:
 		Phase.SPAWN:
 			_spawn_tap(cell)
-		Phase.PLAN_MOVE:
-			_move_tap(cell)
-		Phase.PLAN_SKILL:
-			_skill_tap(cell)
+		Phase.PLAN:
+			_plan_tap(cell)
 
 
 func _spawn_tap(cell: Vector2i) -> void:
@@ -238,104 +300,129 @@ func _spawn_tap(cell: Vector2i) -> void:
 		_refresh()
 
 
-func _select(u: Unit) -> void:
-	selected = u
-	pending_skill = ""
-	board.selected_id = u.id if u != null else -1
-	board.highlights = {}
-	if u != null and u.is_hero():
-		if phase == Phase.PLAN_MOVE and engine.can_move(u):
-			for c in engine.movement_options(u):
-				board.highlights[c] = HL_MOVE
-	_refresh()
-
-
-func _move_tap(cell: Vector2i) -> void:
+func _plan_tap(cell: Vector2i) -> void:
 	var u := engine.unit_at(cell)
+	if pending_aim and selected != null and board.highlights.has(cell):
+		_set_aim(selected, cell)
+		return
 	if u != null and u != selected:
 		_select(u)
 		return
 	if selected == null or not selected.is_hero():
 		return
 	if u == selected:
-		move_orders.erase(selected.id)
-		board.move_arrows.erase(selected.id)
-		_refresh()
+		# Tap yourself: cancel the planned move.
+		var o := _order(selected)
+		if o.has("move"):
+			o.erase("move")
+			board.move_arrows.erase(selected.id)
+			_after_move_change(selected)
+		else:
+			_select(selected)
 		return
-	if board.highlights.has(cell):
-		move_orders[selected.id] = cell
+	if board.highlights.has(cell) and not pending_aim:
+		_order(selected).move = cell
 		board.move_arrows[selected.id] = cell
-		_auto_select_next_or_keep()
+		_after_move_change(selected)
 
 
-func _skill_tap(cell: Vector2i) -> void:
-	if pending_skill != "" and selected != null and board.highlights.has(cell):
-		skill_orders[selected.id] = {"skill": pending_skill, "cell": cell}
-		board.plan_labels[selected.id] = SkillDB.get_def(pending_skill).name
-		pending_skill = ""
-		board.highlights = {}
-		_auto_select_next_or_keep()
+## A move changes where skills fire from, so any aim has to be redone.
+func _after_move_change(u: Unit) -> void:
+	var o := _order(u)
+	o.erase("aim_dir")
+	o.erase("aim_cell")
+	board.aim_marks.erase(u.id)
+	_update_plan_label(u)
+	if _needs_aim(u):
+		_show_aim_highlights(u)
+		_refresh()
+	else:
+		_advance_or_keep(u)
+
+
+func _set_aim(u: Unit, cell: Vector2i) -> void:
+	var f := _firing_skill(u)
+	var o := _order(u)
+	var from := _from_pos(u)
+	match SkillDB.get_def(f.skill).target:
+		"dir":
+			o.aim_dir = GameEngine.dir_to(from, cell)
+			board.aim_marks[u.id] = from + o.aim_dir
+		_:
+			o.aim_cell = cell
+			board.aim_marks[u.id] = cell
+	pending_aim = false
+	_update_plan_label(u)
+	_advance_or_keep(u)
+
+
+func _on_card_pressed(card: Dictionary) -> void:
+	if selected == null or not selected.is_hero() or phase != Phase.PLAN:
 		return
-	var u := engine.unit_at(cell)
-	if u != null:
-		_select(u)
+	var u := selected
+	var o := _order(u)
+	o.skill = card.skill
+	o.rank = card.rank
+	o.erase("aim_dir")
+	o.erase("aim_cell")
+	board.aim_marks.erase(u.id)
+	var p := SkillDB.params(card.skill, card.rank)
+	if p.get("load", 0) > 0 and o.has("move"):
+		o.erase("move")
+		board.move_arrows.erase(u.id)
+	_update_plan_label(u)
+	if _needs_aim(u):
+		_show_aim_highlights(u)
+		_refresh()
+	else:
+		_advance_or_keep(u)
 
 
-func _auto_select_next_or_keep() -> void:
+func _update_plan_label(u: Unit) -> void:
+	var o: Dictionary = orders.get(u.id, {})
+	var parts: Array[String] = []
+	if o.has("move"):
+		parts.append("Move")
+	var f := _firing_skill(u)
+	if not f.is_empty():
+		parts.append(SkillDB.get_def(f.skill).name)
+	if parts.is_empty():
+		board.plan_labels.erase(u.id)
+	else:
+		board.plan_labels[u.id] = " + ".join(parts)
+
+
+## After finishing one hero's plan, jump to the next undecided hero.
+func _advance_or_keep(u: Unit) -> void:
 	var prev := selected
 	selected = null
 	_auto_select_next()
 	if selected == null:
 		_select(prev)
-		board.highlights = {}
-		_refresh()
-
-
-func _on_skill_pressed(sid: String) -> void:
-	if selected == null or not selected.is_hero() or phase != Phase.PLAN_SKILL:
-		return
-	var def := SkillDB.get_def(sid)
-	board.highlights = {}
-	if def.target == "self":
-		skill_orders[selected.id] = {"skill": sid, "cell": selected.pos}
-		board.plan_labels[selected.id] = def.name
-		pending_skill = ""
-		_auto_select_next_or_keep()
-		return
-	pending_skill = sid
-	for c in engine.skill_targets(selected, sid):
-		board.highlights[c] = HL_TARGET
-	_refresh()
 
 
 func _clear_selected_order() -> void:
 	if selected == null:
 		return
-	move_orders.erase(selected.id)
+	orders.erase(selected.id)
 	board.move_arrows.erase(selected.id)
-	skill_orders.erase(selected.id)
 	board.plan_labels.erase(selected.id)
-	pending_skill = ""
+	board.aim_marks.erase(selected.id)
+	pending_aim = false
 	_select(selected)
 
 
 func _on_confirm() -> void:
-	match phase:
-		Phase.PLAN_MOVE:
-			var orders := ai.move_orders(engine, Unit.TEAM_MONSTERS)
-			for id in move_orders:
-				orders[id] = move_orders[id]
-			engine.resolve_movement(orders)
-			_set_phase(Phase.PLAN_SKILL)
-		Phase.PLAN_SKILL:
-			var orders := ai.skill_orders(engine, Unit.TEAM_MONSTERS)
-			for id in skill_orders:
-				orders[id] = skill_orders[id]
-			engine.resolve_skills(orders)
-			engine.end_round()
-			if _check_game_over():
-				return
-			_begin_round()
+	if phase != Phase.PLAN:
+		return
+	var all := ai.orders(engine, Unit.TEAM_MONSTERS)
+	for id in orders:
+		if not orders[id].is_empty():
+			all[id] = orders[id]
+	engine.resolve_round(all)
+	if _check_game_over():
+		return
+	_begin_round()
 
 
 # ------------------------------------------------------------------ display
@@ -351,7 +438,7 @@ func _refresh() -> void:
 	board.queue_redraw()
 	_refresh_hint()
 	_refresh_info()
-	_refresh_skill_bar()
+	_refresh_hand()
 
 
 func _refresh_hint() -> void:
@@ -359,22 +446,23 @@ func _refresh_hint() -> void:
 		Phase.SPAWN:
 			if not spawn_queue.is_empty():
 				hint_label.text = "Deploy %s: tap a green cell." % spawn_queue[0].name
-		Phase.PLAN_MOVE:
+		Phase.PLAN:
 			var pending := 0
 			for u in engine.living(Unit.TEAM_HEROES):
-				if engine.can_move(u) and not move_orders.has(u.id):
+				if _needs_order(u):
 					pending += 1
-			if pending_skill == "" and selected != null and selected.is_hero() and engine.can_move(selected):
-				hint_label.text = "Tap a blue cell to move %s (tap them again to stay). %d hero%s undecided." % [selected.name, pending, "" if pending == 1 else "es"]
+			if selected != null and selected.is_hero():
+				var f := _firing_skill(selected)
+				if pending_aim:
+					hint_label.text = "Aim %s: tap a red cell. (%d undecided)" % [SkillDB.get_def(f.skill).name, pending]
+				elif engine.is_ready(selected):
+					hint_label.text = "%s is charged! Move (blue) first if you like; it fires after the move." % SkillDB.get_def(f.skill).name
+				elif not f.is_empty() and SkillDB.params(f.skill, f.rank).get("load", 0) > 0:
+					hint_label.text = "%s will be played face down. No moving this turn. (%d undecided)" % [SkillDB.get_def(f.skill).name, pending]
+				else:
+					hint_label.text = "Tap a blue cell to move and/or a card to play. Tap %s to stay. (%d undecided)" % [selected.name, pending]
 			else:
-				hint_label.text = "Tap a hero to plan their move, then Reveal Moves. Monsters move at the same time!"
-		Phase.PLAN_SKILL:
-			if pending_skill != "":
-				hint_label.text = "Tap a red cell to aim %s." % SkillDB.get_def(pending_skill).name
-			elif selected != null and selected.is_hero():
-				hint_label.text = "Pick a skill card for %s, or Reveal Skills to resolve the round." % selected.name
-			else:
-				hint_label.text = "Tap a hero to choose their skill."
+				hint_label.text = "Tap a hero to plan. Reveal when everyone is set; monsters act at the same time."
 		Phase.GAME_OVER:
 			hint_label.text = ""
 
@@ -388,13 +476,13 @@ func _refresh_info() -> void:
 	var line := "%s (%s)  Life %d/%d  Stam %d/%d  Atk %d  Move %d" % [u.name, kind, u.life, u.max_life, u.stam, u.max_stam, u.attack, u.move]
 	var st: String = u.short_status()
 	if st != "":
-		line += "\n" + st
+		line += "   " + st
 	if u.is_hero():
-		if move_orders.has(u.id):
-			line += "   Move planned."
-		if skill_orders.has(u.id):
-			line += "   Skill: %s" % SkillDB.get_def(skill_orders[u.id].skill).name
-	elif u.state == Unit.State.ACTIVE and u.loading.is_empty():
+		line += "\nDeck %d  Hand %d  Discard %d" % [u.deck.size(), u.hand.size(), u.discard.size()]
+		var o: Dictionary = orders.get(u.id, {})
+		if o.has("move") or o.has("skill") or engine.is_ready(u):
+			line += "   Plan: " + board.plan_labels.get(u.id, "")
+	elif u.loading.is_empty():
 		var names: Array[String] = []
 		for s in u.skills:
 			names.append(SkillDB.get_def(s).name)
@@ -402,62 +490,62 @@ func _refresh_info() -> void:
 	info_label.text = line
 
 
-func _refresh_skill_bar() -> void:
-	UI.clear_children(skill_bar)
-	if phase != Phase.PLAN_SKILL or selected == null or not selected.is_hero():
+func _refresh_hand() -> void:
+	UI.clear_children(hand_bar)
+	if phase != Phase.PLAN or selected == null or not selected.is_hero():
 		return
 	var u := selected
-	var avail := engine.available_skills(u)
-	if not engine.can_act(u):
-		skill_bar.add_child(UI.label("%s cannot act this round (%s)." % [u.name, u.short_status()], "DimLabel"))
+	if engine.is_ready(u):
+		hand_bar.add_child(UI.label("%s fires this round." % SkillDB.display_name(u.loading.skill, u.loading.rank), "DimLabel"))
 		return
-	for sid in u.skills:
-		var def := SkillDB.get_def(sid)
-		if not u.weapon_ok(def.weapon):
-			continue
-		var p := SkillDB.params(sid, u.skills[sid])
-		var txt := SkillDB.display_name(sid, u.skills[sid])
-		var cost_bits: Array[String] = []
+	if not engine.can_play(u):
+		hand_bar.add_child(UI.label("%s cannot play a card this round (%s)." % [u.name, u.short_status()], "DimLabel"))
+		return
+	var o: Dictionary = orders.get(u.id, {})
+	for card in u.hand:
+		var p := SkillDB.params(card.skill, card.rank)
+		var txt := SkillDB.display_name(card.skill, card.rank)
+		var bits: Array[String] = []
 		if p.cost > 0:
-			cost_bits.append("%d st" % p.cost)
+			bits.append("%d st" % p.cost)
 		if p.get("life_cost", 0) > 0:
-			cost_bits.append("%d life" % p.life_cost)
+			bits.append("%d life" % p.life_cost)
 		if p.get("load", 0) > 0:
-			cost_bits.append("load %d" % p.load)
-		if engine.is_chain_available(u, sid):
+			bits.append("load %d" % p.load)
+		if engine.is_chain_available(u, card.skill):
 			txt = "CHAIN " + txt
-		txt += "\n" + (", ".join(cost_bits) if not cost_bits.is_empty() else "free")
+		txt += "\n" + (", ".join(bits) if not bits.is_empty() else "free")
 		var b := Button.new()
 		b.text = txt
 		b.theme_type_variation = "SkillButton"
-		b.disabled = not (sid in avail)
+		b.disabled = not engine.card_playable(u, card)
 		b.custom_minimum_size.x = 200
-		b.tooltip_text = SkillDB.describe(sid, u.skills[sid])
-		if skill_orders.has(u.id) and skill_orders[u.id].skill == sid:
+		b.tooltip_text = SkillDB.describe(card.skill, card.rank)
+		if o.get("skill", "") == card.skill and o.get("rank", -2) == card.rank:
 			b.add_theme_color_override("font_color", UI.ACCENT)
-		b.pressed.connect(_on_skill_pressed.bind(sid))
-		skill_bar.add_child(b)
+		b.pressed.connect(_on_card_pressed.bind(card))
+		hand_bar.add_child(b)
 	var help := Button.new()
 	help.text = "?"
 	help.theme_type_variation = "SkillButton"
 	help.custom_minimum_size.x = 90
-	help.pressed.connect(_show_skill_help.bind(u))
-	skill_bar.add_child(help)
+	help.pressed.connect(_show_hand_help.bind(u))
+	hand_bar.add_child(help)
 
 
-func _show_skill_help(u: Unit) -> void:
-	var md := UI.modal(self, "%s's skills" % u.name)
+func _show_hand_help(u: Unit) -> void:
+	var md := UI.modal(self, "%s's hand" % u.name)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(0, 1000)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var v := UI.vbox(10)
 	scroll.add_child(v)
-	for sid in u.skills:
-		var def := SkillDB.get_def(sid)
-		if not u.weapon_ok(def.weapon):
-			continue
-		v.add_child(UI.label(SkillDB.display_name(sid, u.skills[sid])))
-		v.add_child(UI.label(SkillDB.describe(sid, u.skills[sid]), "DimLabel"))
+	for card in u.hand:
+		var def := SkillDB.get_def(card.skill)
+		var title := UI.label("%s  (%s, priority %d)" % [SkillDB.display_name(card.skill, card.rank), SkillDB.rarity_name(card.skill, card.rank), SkillDB.params(card.skill, card.rank).get("priority", 0)])
+		title.add_theme_color_override("font_color", SkillDB.RARITY_COLORS[SkillDB.rarity(card.skill, card.rank)])
+		v.add_child(title)
+		v.add_child(UI.label(SkillDB.describe(card.skill, card.rank), "DimLabel"))
 		if not def.chains.is_empty():
 			var names: Array[String] = []
 			for c in def.chains:
